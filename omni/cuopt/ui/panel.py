@@ -19,7 +19,7 @@ class CuoptPanel:
         self._show_graph_model = ui.SimpleBoolModel(False)
         self._status_label = None
 
-        self._window = ui.Window(self.WINDOW_TITLE, width=380, height=540)
+        self._window = ui.Window(self.WINDOW_TITLE, width=380, height=580)
         self._build()
 
     def _build(self):
@@ -36,11 +36,17 @@ class CuoptPanel:
     def _build_scene_section(self):
         with ui.CollapsableFrame("Scene Setup", collapsed=False):
             with ui.VStack(spacing=6, height=0):
-                ui.Button(
-                    "Create Engine Bay Scene",
-                    height=32,
-                    clicked_fn=self._on_create_scene,
-                )
+                with ui.HStack(spacing=6, height=32):
+                    ui.Button(
+                        "Simple Scene",
+                        height=32,
+                        clicked_fn=lambda: self._on_create_scene("simple"),
+                    )
+                    ui.Button(
+                        "Engine Bay",
+                        height=32,
+                        clicked_fn=lambda: self._on_create_scene("engine_bay"),
+                    )
                 ui.Label(
                     "Drag the colored spheres to move pipe endpoints.",
                     height=28, word_wrap=True,

@@ -11,7 +11,8 @@ import omni.usd
 from .pathfinding import OccupancyGrid3D, smooth_path
 from .cuopt_solver import solve as cuopt_solve
 from .scene_builder import (
-    create_sample_scene,
+    create_simple_scene,
+    create_engine_bay_scene,
     get_obstacle_bounds,
     get_pipe_markers,
     voxelize_obstacles,
@@ -57,13 +58,16 @@ class CuoptPipeRouterExtension(omni.ext.IExt):
         if getattr(self, "_panel", None):
             self._panel.destroy()
 
-    def _create_scene(self) -> None:
+    def _create_scene(self, scene_type="simple") -> None:
         try:
             stage = omni.usd.get_context().get_stage()
-            create_sample_scene(stage)
+            if scene_type == "engine_bay":
+                create_engine_bay_scene(stage)
+            else:
+                create_simple_scene(stage)
             pipes = get_pipe_markers(stage)
             self._panel.set_status(
-                f"Scene created: {len(pipes)} pipes. "
+                f"Scene created ({scene_type}): {len(pipes)} pipes. "
                 "Drag the spheres to set endpoints."
             )
         except Exception as e:

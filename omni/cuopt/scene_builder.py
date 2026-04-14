@@ -1,9 +1,9 @@
 import math
+import os
 import re
 
 import numpy as np
-from pxr import UsdGeom, Gf, Vt, Usd
-
+from pxr import UsdGeom, Gf, Vt, Usd, Sdf
 
 PIPE_PALETTE = [
     {"tube": (0.18, 0.50, 0.92), "start": (0.30, 0.75, 1.00), "end": (0.10, 0.30, 0.65)},
@@ -12,70 +12,93 @@ PIPE_PALETTE = [
     {"tube": (0.20, 0.80, 0.45), "start": (0.35, 1.00, 0.55), "end": (0.10, 0.50, 0.25)},
 ]
 
-# engine bay layout (X = left-right, Y = up, Z = front-back, front of car = -Z)
-# Scale: 1 unit ~ 1 cm.  Bay is roughly 120 wide, 70 deep, 50 tall.
-DEFAULT_OBSTACLES = [
-    {"name": "EngineBlock",  "center": (0, 12, 8),     "size": (22, 20, 24)},
-    {"name": "ValveCover",   "center": (0, 24, 8),     "size": (18, 4, 20)},
-    {"name": "Radiator",     "center": (0, 12, -28),   "size": (40, 18, 3)},
-    {"name": "Battery",      "center": (32, 8, -8),    "size": (10, 12, 12)},
-    {"name": "ACCompressor", "center": (-28, 6, 14),   "size": (8, 8, 8)},
-    {"name": "Alternator",   "center": (24, 6, 18),    "size": (7, 7, 7)},
-    {"name": "Firewall",     "center": (0, 14, 30),    "size": (70, 28, 2)},
-    {"name": "FenderLeft",   "center": (-40, 10, 0),   "size": (2, 18, 60)},
-    {"name": "FenderRight",  "center": (40, 10, 0),    "size": (2, 18, 60)},
+# scene 1: simple cubes
+SIMPLE_OBSTACLES = [
+    {"name": "Block_A", "center": (0, 15, 0),    "size": (25, 30, 25), "color": (0.35, 0.35, 0.38)},
+    {"name": "Block_B", "center": (-25, 25, 15), "size": (10, 25, 20), "color": (0.40, 0.40, 0.42)},
+    {"name": "Block_C", "center": (20, 10, -15), "size": (15, 20, 15), "color": (0.30, 0.30, 0.33)},
+    {"name": "Block_D", "center": (0, 40, -10),  "size": (30, 8, 12),  "color": (0.38, 0.38, 0.40)},
+    {"name": "Block_E", "center": (-10, 0, -20), "size": (12, 10, 12), "color": (0.33, 0.33, 0.36)},
 ]
 
-DEFAULT_PIPES = [
-    # coolant hose: above-left of radiator to gap behind engine
-    {"name": "Coolant",  "start": (-16, 28, -22), "end": (6, 28, 24)},
-    # oil line: right gap beside engine to in front of radiator
-    {"name": "OilLine",  "start": (18, 2, 0),     "end": (22, 4, -35)},
-    # AC line: left gap above compressor to in front of radiator
-    {"name": "ACLine",   "start": (-20, 16, 6),   "end": (-12, 4, -35)},
+SIMPLE_PIPES = [
+    {"name": "Pipe_01", "start": (-45, 10, 35),  "end": (45, 35, -30)},
+    {"name": "Pipe_02", "start": (-45, 40, -30),  "end": (45, 5, 35)},
+    {"name": "Pipe_03", "start": (-45, -10, 0),   "end": (45, 50, 0)},
+]
+
+# scene 2: engine bay (loads USDC from assets/)
+ENGINE_BAY_ASSET = "engine_bay.usdc"
+
+ENGINE_BAY_PIPES = [
+    {"name": "Coolant", "start": (110, 149, -22), "end": (-83, 264, 24)},
+    {"name": "OilLine", "start": (249, 83, 23),   "end": (-148, 321, -35)},
+    {"name": "ACLine",  "start": (-98, 245, 100), "end": (135, 4, -35)},
 ]
 
 
-def create_sample_scene(stage):
-    # I asked claude to create a sample car scene (it looks very bad)
+def _get_asset_path(filename):
+    ext_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    return os.path.join(ext_dir, "assets", filename)
+
+
+def create_simple_scene(stage):
     clear_all(stage)
-
     _ensure_xform(stage, "/World")
     _ensure_xform(stage, "/World/Obstacles")
     _ensure_xform(stage, "/World/Markers")
 
-    obstacle_colors = {
-        "EngineBlock":    Gf.Vec3f(0.35, 0.35, 0.38),
-        "ValveCover":     Gf.Vec3f(0.25, 0.25, 0.28),
-        "Radiator":       Gf.Vec3f(0.12, 0.12, 0.14),
-        "Battery":        Gf.Vec3f(0.20, 0.20, 0.25),
-        "ACCompressor":   Gf.Vec3f(0.30, 0.30, 0.32),
-        "Alternator":     Gf.Vec3f(0.32, 0.32, 0.35),
-        "Firewall":       Gf.Vec3f(0.42, 0.42, 0.44),
-        "FenderLeft":     Gf.Vec3f(0.44, 0.44, 0.46),
-        "FenderRight":    Gf.Vec3f(0.44, 0.44, 0.46),
-    }
-    default_color = Gf.Vec3f(0.35, 0.35, 0.38)
-
-    for obs in DEFAULT_OBSTACLES:
+    for obs in SIMPLE_OBSTACLES:
         path = f"/World/Obstacles/{obs['name']}"
         cube = UsdGeom.Cube.Define(stage, path)
         cube.GetSizeAttr().Set(1.0)
-        color = obstacle_colors.get(obs["name"], default_color)
-        cube.GetDisplayColorAttr().Set(Vt.Vec3fArray([color]))
+        cube.GetDisplayColorAttr().Set(Vt.Vec3fArray([Gf.Vec3f(*obs["color"])]))
         xf = UsdGeom.Xformable(cube.GetPrim())
         xf.AddTranslateOp().Set(Gf.Vec3d(*obs["center"]))
         xf.AddScaleOp().Set(Gf.Vec3f(*obs["size"]))
 
-    for i, pipe in enumerate(DEFAULT_PIPES):
+    _create_pipe_markers(stage, SIMPLE_PIPES, sphere_radius=3.0)
+
+
+def create_engine_bay_scene(stage):
+    clear_all(stage)
+    _ensure_xform(stage, "/World")
+    _ensure_xform(stage, "/World/Obstacles")
+    _ensure_xform(stage, "/World/Markers")
+
+    asset_path = _get_asset_path(ENGINE_BAY_ASSET)
+    if os.path.exists(asset_path):
+        asset_stage = Usd.Stage.Open(asset_path)
+        if asset_stage:
+            dst_layer = stage.GetRootLayer()
+            src_layer = asset_stage.GetRootLayer()
+
+            # match the asset's stage settings so geometry looks identical
+            UsdGeom.SetStageUpAxis(stage, UsdGeom.GetStageUpAxis(asset_stage))
+            UsdGeom.SetStageMetersPerUnit(stage, UsdGeom.GetStageMetersPerUnit(asset_stage))
+
+            # copy each root prim directly under /World/Obstacles
+            for child in asset_stage.GetPseudoRoot().GetChildren():
+                src_path = child.GetPath()
+                dst_path = Sdf.Path(f"/World/Obstacles{src_path}")
+                Sdf.CopySpec(src_layer, src_path, dst_layer, dst_path)
+    else:
+        import carb
+        carb.log_warn(f"[omni.cuopt] asset not found: {asset_path}")
+
+    _create_pipe_markers(stage, ENGINE_BAY_PIPES, sphere_radius=4.0)
+
+
+def _create_pipe_markers(stage, pipes, sphere_radius=3.0):
+    for i, pipe in enumerate(pipes):
         pal = PIPE_PALETTE[i % len(PIPE_PALETTE)]
         _create_sphere(
             stage, f"/World/Markers/{pipe['name']}_Start",
-            pipe["start"], Gf.Vec3f(*pal["start"]), 3.0,
+            pipe["start"], Gf.Vec3f(*pal["start"]), sphere_radius,
         )
         _create_sphere(
             stage, f"/World/Markers/{pipe['name']}_End",
-            pipe["end"], Gf.Vec3f(*pal["end"]), 3.0,
+            pipe["end"], Gf.Vec3f(*pal["end"]), sphere_radius,
         )
 
 
@@ -119,7 +142,6 @@ def get_obstacle_bounds(stage):
 
     cache = UsdGeom.BBoxCache(Usd.TimeCode.Default(), ["default"])
 
-    # whole-subtree AABB (catches deeply nested meshes)
     root_bbox = cache.ComputeWorldBound(root)
     root_rng = root_bbox.ComputeAlignedRange()
     if root_rng.IsEmpty():
@@ -130,7 +152,6 @@ def get_obstacle_bounds(stage):
     hi = root_rng.GetMax()
     bounds.append(((lo[0], lo[1], lo[2]), (hi[0], hi[1], hi[2])))
 
-    # also add per-child AABBs for finer bounding-box fallback
     for child in root.GetChildren():
         bbox = cache.ComputeWorldBound(child)
         rng = bbox.ComputeAlignedRange()
@@ -170,9 +191,9 @@ def voxelize_obstacles(stage, grid, clearance=0.0):
 
         total_verts += len(points)
 
-    carb.log_info(
-        f"[voxelize] {total_verts} vertices, "
-        f"{100.0 * grid.occupied.sum() / grid.resolution**3:.1f}% occupied"
+    carb.log_warn(
+        f"[omni.cuopt] cpu voxelize: {total_verts} vertices, "
+        f"{100.0 * grid.occupied.sum() / grid.occupied.size:.1f}% occupied"
     )
     return total_verts
 
@@ -184,7 +205,6 @@ def fill_interior(grid):
     exterior = np.zeros((ri, rj, rk), dtype=bool)
     queue = deque()
 
-    # seed from all six boundary faces
     for i in range(ri):
         for j in range(rj):
             for idx in [(i, j, 0), (i, j, rk - 1)]:
@@ -204,7 +224,6 @@ def fill_interior(grid):
                     exterior[idx] = True
                     queue.append(idx)
 
-    # 6-connected BFS
     neighbors = [(-1,0,0),(1,0,0),(0,-1,0),(0,1,0),(0,0,-1),(0,0,1)]
     while queue:
         ci, cj, ck = queue.popleft()
@@ -220,7 +239,6 @@ def fill_interior(grid):
 
 def create_tube_mesh(stage, path_points, pipe_name="Pipe", radius=2.0,
                      color=(0.18, 0.50, 0.92), segments=12):
-    """Sweep a circular cross-section along *path_points* to create a tube."""
     prim_path = f"/World/Pipes/{pipe_name}"
     _remove_prim(stage, prim_path)
     _ensure_xform(stage, "/World")
@@ -255,7 +273,6 @@ def create_tube_mesh(stage, path_points, pipe_name="Pipe", radius=2.0,
             ])
             counts.append(4)
 
-    # caps
     ci = len(verts)
     verts.append(Gf.Vec3f(float(pts[0][0]), float(pts[0][1]), float(pts[0][2])))
     for j in range(segments):
