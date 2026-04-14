@@ -220,8 +220,8 @@ def _call_cuopt(offsets, edges, weights, src, dst, base_url, time_limit):
 
         t = _time.time()
         polls = 0
-        for _ in range(120):
-            _time.sleep(0.5)
+        for _ in range(600):
+            _time.sleep(0.1)
             polls += 1
             poll = Request(f"{base}/cuopt/solution/{req_id}", method="GET")
             with urlopen(poll, timeout=10) as r:
