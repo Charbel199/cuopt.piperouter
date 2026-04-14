@@ -1,107 +1,122 @@
 # cuOpt Pipe Router
 
-Omniverse extension that routes pipes through 3D environments while avoiding obstacles. Uses NVIDIA Warp for GPU voxelization and NVIDIA cuOpt for GPU-accelerated route optimization.
+An NVIDIA Omniverse extension that routes pipes through 3D environments while avoiding obstacles. Uses **NVIDIA Warp** for GPU mesh voxelization and **NVIDIA cuOpt** for GPU-accelerated route optimization.
+
+![Engine bay with routed pipes](docs/pipes_output.png)
+
+## Quick start
+
+### 1. Start the cuOpt server
+
+```bash
+docker run --gpus all -it --rm -p 5001:5000 nvidia/cuopt:26.4.0-cuda13.0-py3.13
+```
+
+### 2. Install the extension in Omniverse
+
+1. Open USD Composer (or Isaac Sim)
+2. Go to **Window > Extensions > gear icon**
+3. Add this repo's path as a search path
+4. Search for **cuOpt Pipe Router** and enable it
+
+### 3. Create a scene and route
+
+1. Click **Simple Scene** or **Engine Bay** to load a preset
+2. Drag the colored spheres to position pipe start/end points
+3. Adjust resolution, clearance, and bend penalty
+4. Click **Route All Pipes**
+
+## Scenes
+
+### Simple scene
+
+Five cube obstacles with three pipe routes. Good for understanding the system.
+
+| Bend penalty = 0 (shortest path) | Bend penalty = 20 (fewer bends) |
+|---|---|
+| ![No bend penalty](docs/simple_pipe_nobend.png) | ![With bend penalty](docs/simple_pipe_bend.png) |
+
+### Engine bay
+
+Loads a 3D scanned engine bay from `assets/engine_bay.usdc` with three pipe routes (coolant, oil line, AC line). Works with any imported mesh, just drop it under `/World/Obstacles`.
+
+![Engine bay pipes](docs/pipes_output.png)
 
 ## How it works
 
 ```
-Scene geometry (any imported mesh)
+Scene geometry (any mesh under /World/Obstacles)
         |
-        |  1. Warp GPU kernel: for each grid cell, query signed distance
-        |     to nearest triangle. Inside mesh or within clearance = blocked.
+        |  Warp GPU kernel: signed distance query per grid cell
+        |  Inside mesh or within clearance = blocked
         v
-Occupancy grid (3D voxel grid: blocked vs free)
+Occupancy grid (3D voxel grid, red = blocked, green = free)
         |
-        |  2. Convert free cells to a CSR waypoint graph.
-        |     Each free cell = node. Neighboring free cells = edges.
-        |     Edge weight = distance + bend penalty.
+        |  Build CSR waypoint graph from free cells
+        |  26-connected neighbors, edge weight = distance + bend penalty
         v
-CSR waypoint graph (nodes + edges + weights)
+CSR graph --> JSON --> POST to cuOpt server
         |
-        |  3. Send graph to cuOpt server via REST API.
-        |     cuOpt solves optimal route on GPU.
-        |     Returns waypoint-level path.
+        |  cuOpt solves optimal route on GPU
+        |  Returns waypoint-level path
         v
-Optimal path (sequence of 3D points)
-        |
-        |  4. Smooth with Catmull-Rom spline.
-        |     Generate tube mesh in USD.
-        v
-Tube in the scene
+Smooth with Catmull-Rom spline, generate tube mesh
 ```
 
-Pipes are routed sequentially. Each completed pipe becomes an obstacle for the next one, preventing collisions between pipes.
+Pipes are routed sequentially. Each completed pipe becomes an obstacle for the next one.
 
-## What is a CSR waypoint graph?
+## Debug visualization
 
-CSR (Compressed Sparse Row) packs a graph into two flat arrays:
+Enable the checkboxes under **Debug Visualization** to see what the solver sees:
 
-```
-offsets = [0, 3, 5, 8, ...]    # node i owns edges[offsets[i] .. offsets[i+1]]
-edges   = [4, 7, 12, 0, 7, ...] # destination node of each edge
-weights = [2.1, 3.5, ...]       # cost of each edge
-```
+![Debug view](docs/simple_pipe_debug.png)
 
-Node 0 connects to nodes 4, 7, 12 (edges[0..3]). Node 1 connects to nodes 0, 7 (edges[3..5]). And so on.
+- **Red cubes** = blocked cells (obstacle geometry + safety clearance)
+- **Green dots** = free cells near obstacles (the nodes cuOpt can route through)
+
+![Engine bay debug view](docs/pipes_output_debug_view.png)
+
+## Parameters
+
+| Parameter | What it does |
+|-----------|-------------|
+| **Grid Resolution** | Cells along the longest axis. Higher = more accurate voxelization, slower solve. 30 is fast, 60+ for detailed meshes. |
+| **Safety Clearance** | Minimum distance (in scene units) between pipes and obstacles. |
+| **Tube Radius** | Visual thickness of the generated pipe. |
+| **Bend Penalty** | 0 = shortest path with diagonal cuts. Higher values prefer axis-aligned segments with fewer bends. |
 
 ## What does cuOpt optimize?
 
-Minimizes total edge weight along the path from start to end. Edge weight is:
+Each pipe is a single-vehicle routing problem on the waypoint graph. cuOpt minimizes total edge weight:
 
 ```
 weight = euclidean_distance + bend_penalty * max(0, axes_changed - 1)
 ```
 
-- `bend_penalty = 0`: shortest path, diagonal cuts allowed
-- `bend_penalty > 0`: prefers axis-aligned (straight) segments, fewer bends, longer path
-
-With multiple pipes, routing order matters. The first pipe gets the most freedom. Each subsequent pipe has more constraints because previous pipes block space. (this is what cuOpt expects as input)
-
-## Requirements
-
-- Omniverse Kit-based app (USD Composer, Isaac Sim, etc.)
-- `omni.warp` extension enabled (for GPU voxelization)
-- cuOpt server for GPU routing:
-  ```
-  docker run --gpus all -it --rm -p 5001:5000 nvidia/cuopt:26.4.0-cuda13.0-py3.13
-  ```
-
-## Setup
-
-1. Open your Omniverse app
-2. Window > Extensions > gear icon > add this repo's path as a search path
-3. Search for "cuOpt Pipe Router" and enable it
-
-## Usage
-
-1. Click **Create Engine Bay Scene** or import your own geometry under `/World/Obstacles`
-2. Drag the colored spheres to position pipe start/end points
-3. Adjust parameters:
-   - **Grid Resolution**: cells per axis (30 = fast, 60+ = accurate)
-   - **Safety Clearance**: minimum distance from obstacles (units)
-   - **Tube Radius**: pipe thickness
-   - **Bend Penalty**: 0 = shortest, higher = straighter
-4. Click **Route All Pipes**
-
-## Debug visualization
-
-Expand the "Debug Visualization" section in the panel:
-
-- **Show occupancy grid**: red cubes = blocked cells (obstacle + clearance). This is what the solver sees as impassable.
-- **Show waypoint graph**: green dots = free cells
-
-Both render under `/World/Debug` and are cleared on the next run.
+The graph is sent as CSR (Compressed Sparse Row) format:
+- `offsets[i]` to `offsets[i+1]` = edge range for node i
+- `edges[j]` = destination node of edge j
+- `weights[j]` = cost of edge j
 
 ## Project structure
 
 ```
-config/extension.toml         
+config/extension.toml
+assets/                       scene assets (engine_bay.usdc)
+docs/
 omni/cuopt/
     extension.py              extension lifecycle, multi-pipe orchestration
     warp_voxelizer.py         GPU voxelization via Warp SDF queries
     cuopt_solver.py           CSR graph builder + cuOpt REST client
     pathfinding.py            occupancy grid, path smoothing
     scene_builder.py          USD geometry: obstacles, markers, tubes
-    debug_viz.py              occupancy grid + waypoint graph visualization
+    debug_viz.py              occupancy grid + free cell visualization
     ui/panel.py               omni.ui panel
 ```
+
+## Requirements
+
+- NVIDIA GPU
+- NVIDIA Omniverse (works with any kit application, I tested it on IsaacSim)
+- `omni.warp` extension enabled
+- cuOpt 26.4.0+ Docker container
