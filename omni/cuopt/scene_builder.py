@@ -141,19 +141,13 @@ def get_obstacle_bounds(stage):
         return []
 
     cache = UsdGeom.BBoxCache(Usd.TimeCode.Default(), ["default"])
-
-    root_bbox = cache.ComputeWorldBound(root)
-    root_rng = root_bbox.ComputeAlignedRange()
-    if root_rng.IsEmpty():
-        return []
-
     bounds = []
-    lo = root_rng.GetMin()
-    hi = root_rng.GetMax()
-    bounds.append(((lo[0], lo[1], lo[2]), (hi[0], hi[1], hi[2])))
 
-    for child in root.GetChildren():
-        bbox = cache.ComputeWorldBound(child)
+    # per-prim AABBs recursively
+    for prim in Usd.PrimRange(root):
+        if not prim.IsA(UsdGeom.Gprim):
+            continue
+        bbox = cache.ComputeWorldBound(prim)
         rng = bbox.ComputeAlignedRange()
         if rng.IsEmpty():
             continue
