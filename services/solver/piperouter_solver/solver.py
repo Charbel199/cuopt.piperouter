@@ -1,0 +1,73 @@
+from __future__ import annotations
+
+import numpy as np
+
+from .backend import shortest_path
+from .lattice import ExpandedLatticeBuilder, LatticeBuilder
+from .models import RouteRequest, RouteResult, SolveReport
+
+
+class Solver:
+    def __init__(self, builder: LatticeBuilder | None = None):
+        self.builder = builder or ExpandedLatticeBuilder()
+
+    def _solve_leg(self, stack, wire, weights, connectivity, start_cell, goal_cell,
+                   extra_obstacles, clearance_m=0.0):
+        g = self.builder.build(
+            stack, wire, weights, connectivity, start_cell, goal_cell, extra_obstacles,
+            clearance_m=clearance_m,
+        )
+        path, _cost = shortest_path(
+            g.src, g.dst, g.weight, g.n_nodes, g.source_id, g.sink_id
+        )
+        if path is None:
+            return None
+        # map node path -> cell path, dropping source/sink and consecutive dupes
+        cells: list[tuple[int, int, int]] = []
+        for node in path:
+            if node in (g.source_id, g.sink_id):
+                continue
+            c = g.cell_of(node)
+            if not cells or cells[-1] != c:
+                cells.append(c)
+        return cells
+
+    def route_one(self, stack, req: RouteRequest, extra_obstacles=None) -> RouteResult:
+        frame = stack.frame
+        waypts = [req.start, *req.waypoints, req.end]
+        cell_seq = [frame.world_to_grid(p) for p in waypts]
+
+        all_cells: list[tuple[int, int, int]] = []
+        for a, b in zip(cell_seq[:-1], cell_seq[1:]):
+            leg = self._solve_leg(
+                stack, req.wire, req.weights, req.connectivity, a, b, extra_obstacles,
+                clearance_m=req.clearance_m,
+            )
+            if leg is None:
+                return RouteResult(wire_id=req.wire.id, status="no_path")
+            if all_cells and leg and all_cells[-1] == leg[0]:
+                leg = leg[1:]
+            all_cells.extend(leg)
+
+        polyline = [frame.grid_to_world(c) for c in all_cells]
+        length = 0.0
+        for p, q in zip(polyline[:-1], polyline[1:]):
+            length += float(np.linalg.norm(np.asarray(q) - np.asarray(p)))
+        return RouteResult(
+            wire_id=req.wire.id, status="routed",
+            polyline=polyline, length_m=length, cells=all_cells,
+        )
+
+    def route_all(self, stack, requests: list[RouteRequest]) -> SolveReport:
+        """Priority-ordered greedy: earlier (lower-priority-number) routes become
+        obstacles for later ones (spec §5, Route-All)."""
+        ordered = sorted(requests, key=lambda r: r.priority)
+        occupied = np.zeros(stack.frame.res_xyz, dtype=bool)
+        results: list[RouteResult] = []
+        for req in ordered:
+            res = self.route_one(stack, req, extra_obstacles=occupied)
+            if res.status == "routed":
+                for c in res.cells:
+                    occupied[c] = True
+            results.append(res)
+        return SolveReport(results=results)
