@@ -227,6 +227,8 @@ class PipeRouterExtension(omni.ext.IExt):
             eye = center + np.asarray(offset, float)
             path = f"{scene_ops.PIPEROUTER_ROOT}/cameras/{plane}"
             cam = UsdGeom.Camera.Define(stage, path)
+            # hide the camera gizmo in the viewport (still usable as a viewport camera)
+            UsdGeom.Imageable(cam).CreateVisibilityAttr().Set(UsdGeom.Tokens.invisible)
             view = Gf.Matrix4d().SetLookAt(
                 Gf.Vec3d(*[float(x) for x in eye]),
                 Gf.Vec3d(*[float(x) for x in center]),

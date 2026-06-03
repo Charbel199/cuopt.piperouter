@@ -16,6 +16,8 @@ import json
 
 import omni.kit.app
 import omni.ui as ui
+import omni.usd
+from pxr import Tf, Usd
 
 from . import scene_ops, wire_library
 
@@ -75,8 +77,11 @@ class PipeRouterPanel:
             with ui.ScrollingFrame():
                 with ui.VStack(spacing=6, height=0):
                     ui.Label("PipeRouter", style={"font_size": 20})
-                    with ui.HStack(height=0):
-                        ui.Button("Reconnect", width=110, clicked_fn=self._check_connection)
+                    with ui.HStack(height=0, spacing=6):
+                        ui.Button("Reconnect", width=100, clicked_fn=self._check_connection)
+                        self._status_dot = ui.Rectangle(
+                            width=12, height=12,
+                            style={"background_color": 0xFF888888, "border_radius": 6})
                         self._status = ui.Label("checking...")
                     self._progress = ui.Label("", style={"color": 0xFFBBBBBB})
 
@@ -87,6 +92,36 @@ class PipeRouterPanel:
                     self._section_tagging()
                     self._section_output()
         self._check_connection()
+        self._obj_listener = None
+        self._stage_sub = None
+        self._register_stage_listener()
+
+    def _register_stage_listener(self):
+        """Watch the stage so the tagged-prims list updates when the scene changes
+        (e.g. an object is deleted) — not just when we tag from the panel."""
+        try:
+            if self._obj_listener is not None:
+                self._obj_listener.Revoke()
+                self._obj_listener = None
+            stage = self._get_stage()
+            if stage is not None:
+                self._obj_listener = Tf.Notice.Register(
+                    Usd.Notice.ObjectsChanged, self._on_objects_changed, stage)
+            if self._stage_sub is None:
+                self._stage_sub = omni.usd.get_context().get_stage_event_stream() \
+                    .create_subscription_to_pop(self._on_stage_event, name="piperouter.stage")
+        except Exception:
+            pass
+
+    def _on_objects_changed(self, notice, sender):
+        # coalesced (one rebuild next frame); rebuilding only reads the stage, so it
+        # cannot re-trigger this notice
+        self._schedule(tags=True)
+
+    def _on_stage_event(self, e):
+        if e.type == int(omni.usd.StageEventType.OPENED):
+            self._register_stage_listener()   # re-bind to the new stage
+            self._schedule(tags=True)
 
     def _section_views(self):
         self._views_frame = ui.CollapsableFrame("Cross-sections + cameras", collapsed=True)
@@ -206,11 +241,11 @@ class PipeRouterPanel:
         url = self._url_value()
         info, err = self._api.health(url)
         if err:
-            self._status.text = f"● not connected — {err.splitlines()[0][:42]}"
-            self._status.set_style({"color": _BAD})
+            self._status.text = f"Not connected  ({err.splitlines()[0][:40]})"
+            self._status_dot.set_style({"background_color": _BAD, "border_radius": 6})
         else:
-            self._status.text = f"● connected — backend: {info.get('backend', '?')}"
-            self._status.set_style({"color": _OK})
+            self._status.text = f"Connected  (backend: {info.get('backend', '?')})"
+            self._status_dot.set_style({"background_color": _OK, "border_radius": 6})
 
     def _url_value(self):
         return self._default_url  # URL is fixed for now; Reconnect re-probes it
@@ -634,6 +669,10 @@ class PipeRouterPanel:
         return "\n".join(lines)
 
     def destroy(self):
+        if getattr(self, "_obj_listener", None) is not None:
+            self._obj_listener.Revoke()
+            self._obj_listener = None
+        self._stage_sub = None
         if self._window:
             self._window.destroy()
             self._window = None
