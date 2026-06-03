@@ -1,8 +1,37 @@
+# Python
 __pycache__/
 *.pyc
 *.pyo
 *.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtualenv
+.venv/
+venv/
+env/
+
+# Build / packaging
 dist/
 build/
+*.egg
+
+# Solver service grid handoff (tmpfs session data) + local artifacts
+*.npz
+/dev/shm/piperouter/
+
+# Docker / compose local overrides
+docker-compose.override.yml
+
+# Frontend (if reintroduced)
+node_modules/
+
+# Editors / OS
 .vscode/
 .idea/
+*.swp
+.DS_Store
+
+# Logs
+*.log

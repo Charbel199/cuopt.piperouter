@@ -1,0 +1,33 @@
+# PipeRouter compute backend. Run on the GPU workstation:
+#   docker compose up --build -d
+# The Omniverse extension (on the host) writes voxel grids into
+# /dev/shm/piperouter/<session>/ and calls the solver at http://localhost:8000.
+services:
+  solver:
+    build: ./services/solver
+    image: piperouter-solver
+    container_name: piperouter-solver
+    ports:
+      - "${PIPEROUTER_PORT:-8000}:8000"
+    environment:
+      - PIPEROUTER_GRID_DIR=/dev/shm/piperouter
+      - WIRE_TYPES_PATH=/app/wire_types.json
+    volumes:
+      # shared grid handoff: same tmpfs path on host and container
+      - /dev/shm/piperouter:/dev/shm/piperouter
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health').status==200 else 1)"
+      interval: 10s
+      timeout: 5s
+      retries: 10
