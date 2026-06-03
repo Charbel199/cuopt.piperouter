@@ -511,6 +511,7 @@ class PipeRouterPanel:
         self._schedule(wires=True)
         self._bom.text = self._format_bom(self._last_bom)
         self._refresh_views()
+        self._refresh_overlay()
 
     def _on_refine(self):
         if self._selected is None:
@@ -540,6 +541,7 @@ class PipeRouterPanel:
         self._progress.text = f"{w['name']}: {w['status']}"
         self._schedule(wires=True)
         self._refresh_views()
+        self._refresh_overlay()
 
     # ------------------------------------------------------ tag / overlay / io
     def _refresh_views(self, force=False):
@@ -575,6 +577,22 @@ class PipeRouterPanel:
         self._progress.text = err if err else "tagged selection"
         if not err:
             self._schedule(tags=True)
+
+    def _refresh_overlay(self):
+        """Re-render the active debug overlay (occupancy/thermal/em) with the latest
+        grids; no-op if the overlay is set to None."""
+        combo = getattr(self, "_overlay_combo", None)
+        if combo is None:
+            return
+        idx = combo.model.get_item_value_model().as_int
+        if idx == 0:                      # "None"
+            return
+        mode = ("none", "occupancy", "thermal", "em")[idx]
+        clearance = float(self._clearance.model.get_value_as_float())
+        err = self._api.show_overlay(self._res.model.get_value_as_int(),
+                                     self._url_value(), mode, clearance_m=clearance)
+        if err:
+            self._progress.text = f"overlay: {err}"
 
     def _on_overlay(self, model, item=None):
         mode = ("none", "occupancy", "thermal", "em")[model.get_item_value_model().as_int]

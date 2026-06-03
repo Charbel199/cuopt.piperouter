@@ -50,7 +50,11 @@ def _ensure_warp():
             origin[2] + (float(k) + 0.5) * cell_size,
         )
         idx = i * rj * rk + j * rk + k
-        query = wp.mesh_query_point_sign_normal(mesh_id, center, max_dist)
+        # Winding-number sign test: robust inside/outside for closed and MULTI-component
+        # meshes. (The older sign_normal test uses the nearest face's normal, which
+        # misclassifies points between two objects / near concavities as "inside",
+        # producing occupancy artifacts in empty gaps.)
+        query = wp.mesh_query_point_sign_winding_number(mesh_id, center, max_dist, 2.0, 0.5)
         if query.result:
             cp = wp.mesh_eval_position(mesh_id, query.face, query.u, query.v)
             d = wp.length(center - cp)

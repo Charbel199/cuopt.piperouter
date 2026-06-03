@@ -38,7 +38,7 @@ class RouterSession:
         self.client = SolverClient(solver_url)
         self.frame = None         # (bounds_min, cell_size, res_xyz) from the last voxelize
         self.last_stats = {}      # stats from the last compute_grids (for logging/UI)
-        self.last_grids = None    # (bounds_min, cell, res, occ, thermal) for the 2D views
+        self.last_grids = None    # (bounds_min, cell, res, occ, thermal, em) for views/overlay
 
     def compute_grids(self, stage, resolution=64, pad_frac=0.05):
         """Read the stage and build the four voxel grids (occupancy, surface distance,
@@ -101,7 +101,7 @@ class RouterSession:
         path.parent.mkdir(parents=True, exist_ok=True)
         grid_io.save_grids(path, gbmin, cell, res, occ, sd, thermal, em)
         self.frame = (gbmin, cell, res)
-        self.last_grids = (gbmin, cell, res, occ, thermal)  # cached for the 2D views
+        self.last_grids = (gbmin, cell, res, occ, thermal, em)  # cached for views/overlay
         return session_id
 
     def route_all(self, stage, session_id, wires):

@@ -128,7 +128,13 @@ class PipeRouterExtension(omni.ext.IExt):
                 return None
 
             s = self._ensure_session(url)
-            gbmin, cell, res, occ, sd, thermal, em = s.compute_grids(stage, resolution)
+            # reuse the grids from the last route (matches what the router saw, and
+            # avoids re-voxelizing); fall back to a fresh voxelize if not routed yet
+            grids = getattr(s, "last_grids", None)
+            if grids is not None:
+                gbmin, cell, res, occ, thermal, em = grids
+            else:
+                gbmin, cell, res, occ, _sd, thermal, em = s.compute_grids(stage, resolution)
             ambient = 20.0
 
             if mode == "occupancy":
@@ -212,7 +218,7 @@ class PipeRouterExtension(omni.ext.IExt):
                 return "no geometry to frame"
             bmin, bmax = bounds
             center = 0.5 * (bmin + bmax)
-            dist = float(np.linalg.norm(bmax - bmin)) * 1.4 + 1e-3
+            dist = float(np.linalg.norm(bmax - bmin)) * 2.4 + 1e-3
             offset, up = {
                 "xy": ((0, 0, dist), (0, 1, 0)),    # top, looking down -Z
                 "xz": ((0, -dist, 0), (0, 0, 1)),   # front, looking +Y
