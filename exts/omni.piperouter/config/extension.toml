@@ -1,0 +1,17 @@
+[package]
+version = "0.5.0"
+title = "PipeRouter"
+description = "Constraint-aware wire/pipe routing for automotive USD (cuGraph + Warp)."
+category = "Simulation"
+keywords = ["wiring", "piping", "routing", "usd", "cugraph", "warp"]
+authors = ["NVIDIA"]
+
+[dependencies]
+"omni.ui" = {}
+"omni.usd" = {}
+# Warp is used for in-process voxelization; optional so the extension still loads
+# (and reports a clear error on Route) in an app where Warp isn't present.
+"omni.warp.core" = { optional = true }
+
+[[python.module]]
+name = "omni.piperouter"
