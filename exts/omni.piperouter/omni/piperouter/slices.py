@@ -21,21 +21,8 @@ _PLANES = {"xy": (2, 0, 1), "xz": (1, 0, 2), "yz": (0, 1, 2)}
 
 _BG = (0.93, 0.93, 0.95)
 _OCC = (0.20, 0.20, 0.24)
-_HALO = (0.62, 0.62, 0.68)
 _GREEN = (0.10, 0.85, 0.15)
 _RED = (0.95, 0.10, 0.10)
-
-
-def _dilate2d(mask, n):
-    out = mask.copy()
-    for _ in range(int(n)):
-        d = out.copy()
-        d[1:, :] |= out[:-1, :]
-        d[:-1, :] |= out[1:, :]
-        d[:, 1:] |= out[:, :-1]
-        d[:, :-1] |= out[:, 1:]
-        out = d
-    return out
 
 
 def _disk(img, r, c, color, rad):
@@ -66,8 +53,9 @@ def _line(img, r0, c0, r1, c1, color, thick):
 
 
 def render_views(bounds_min, cell_size, res_xyz, occ, thermal, routes,
-                 clearance_cells=0, ambient=20.0, target_px=720):
-    """Return {"xy","xz","yz"} -> RGBA uint8 array (H, W, 4) at ~target_px."""
+                 ambient=20.0, target_px=720):
+    """Return {"xy","xz","yz"} -> RGBA uint8 array (H, W, 4) at ~target_px. `occ` is
+    the prohibited-voxel grid (mesh + baked safety clearance), shown as occupancy."""
     bounds_min = np.asarray(bounds_min, float)
     occ = occ.astype(bool)
     res = np.asarray(res_xyz, int)
@@ -79,8 +67,6 @@ def render_views(bounds_min, cell_size, res_xyz, occ, thermal, routes,
     for name, (ca, ha, va) in _PLANES.items():
         occ2d = occ.any(axis=ca)                         # (res[ha], res[va])
         therm2d = thermal.max(axis=ca)
-        halo2d = (_dilate2d(occ2d, clearance_cells) & ~occ2d) if clearance_cells > 0 \
-            else np.zeros_like(occ2d)
 
         hd, vd = occ2d.shape
         base = np.empty((hd, vd, 3), dtype=np.float32)
@@ -88,7 +74,6 @@ def render_views(bounds_min, cell_size, res_xyz, occ, thermal, routes,
         t01 = np.clip((therm2d - t_lo) / (t_hi - t_lo), 0.0, 1.0)
         warm = t01 > 0.02
         base[warm] = (1.0 - t01[warm, None]) * np.array(_BG) + t01[warm, None] * np.array([1.0, 0.35, 0.2])
-        base[halo2d] = _HALO
         base[occ2d] = _OCC
 
         # orient to image space: rows = vertical axis (flipped so + is up), cols = horiz

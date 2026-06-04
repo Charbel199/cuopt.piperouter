@@ -8,8 +8,7 @@ def test_render_views_returns_three_rgba_images():
     occ = np.zeros(res, dtype=np.uint8)
     occ[5, 4, 3] = 1
     thermal = np.full(res, 20.0, dtype=np.float32)
-    imgs = slices.render_views([0, 0, 0], 0.1, res, occ, thermal, routes=[],
-                               clearance_cells=0, target_px=80)
+    imgs = slices.render_views([0, 0, 0], 0.1, res, occ, thermal, routes=[], target_px=80)
     assert set(imgs) == {"xy", "xz", "yz"}
     for k, im in imgs.items():
         assert im.ndim == 3 and im.shape[2] == 4

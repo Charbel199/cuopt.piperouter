@@ -30,4 +30,7 @@ COPY piperouter_service ./piperouter_service
 RUN pip install --no-cache-dir .
 
 EXPOSE 8000
-CMD ["uvicorn", "piperouter_service.app:app", "--host", "0.0.0.0", "--port", "8000"]
+# The container runs as root and shares the grid dir (a bind mount) with the host
+# extension (a normal user). Make it world-writable on startup so the extension can
+# create session subdirs in it — otherwise the host gets EACCES on the root-owned dir.
+CMD ["sh", "-c", "mkdir -p \"$PIPEROUTER_GRID_DIR\" && chmod 777 \"$PIPEROUTER_GRID_DIR\" && exec uvicorn piperouter_service.app:app --host 0.0.0.0 --port 8000"]

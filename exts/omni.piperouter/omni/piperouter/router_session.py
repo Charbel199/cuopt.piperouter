@@ -40,10 +40,12 @@ class RouterSession:
         self.last_stats = {}      # stats from the last compute_grids (for logging/UI)
         self.last_grids = None    # (bounds_min, cell, res, occ, thermal, em) for views/overlay
 
-    def compute_grids(self, stage, resolution=64, pad_frac=0.05):
+    def compute_grids(self, stage, resolution=64, pad_frac=0.05, clearance_m=0.0):
         """Read the stage and build the four voxel grids (occupancy, surface distance,
-        thermal, EM) IN MEMORY. Shared by voxelize_scene (which saves them for the
-        solver) and the debug overlay (which just visualizes them).
+        thermal, EM) IN MEMORY. The safety clearance is BAKED INTO the occupancy here
+        (occupied cells dilated by round(clearance/cell)), so the single saved grid is
+        the prohibited-voxel set used by the router AND shown by the overlay/2D views —
+        one source of truth. Shared by voxelize_scene and the debug overlay.
 
         Returns: (bounds_min, cell_size, res_xyz, occupancy, surface_dist, thermal, em).
         """
@@ -66,6 +68,13 @@ class RouterSession:
         gbmin, cell, res = grid_io.frame_from_bounds(bmin, bmax, resolution)
         pts, idx = voxelizer.collect_meshes(stage, prims)
         occ, sd = voxelizer.voxelize(pts, idx, gbmin, cell, res)
+
+        # BAKE the safety clearance into the occupancy: grow prohibited voxels by
+        # round(clearance/cell). This IS the keep-out the router avoids and the views
+        # show — change clearance -> more prohibited voxels -> re-solve.
+        clearance_cells = int(float(clearance_m) / cell + 0.5 + 1e-9)
+        if clearance_cells > 0:
+            occ = grid_io.dilate_mask(occ.astype(bool), clearance_cells).astype(np.uint8)
 
         # Thermal / EM fields: each tagged prim becomes a source at its bbox centre.
         # The field radiates over `char_size + FIELD_MARGIN_M` so a big hot block heats
@@ -95,8 +104,9 @@ class RouterSession:
                  self.last_stats["thermal_max_c"], self.last_stats["seconds"])
         return gbmin, cell, res, occ, sd, thermal, em
 
-    def voxelize_scene(self, stage, session_id, resolution=64, pad_frac=0.05):
-        gbmin, cell, res, occ, sd, thermal, em = self.compute_grids(stage, resolution, pad_frac)
+    def voxelize_scene(self, stage, session_id, resolution=64, pad_frac=0.05, clearance_m=0.0):
+        gbmin, cell, res, occ, sd, thermal, em = self.compute_grids(
+            stage, resolution, pad_frac, clearance_m=clearance_m)
         path = self.grid_dir / session_id / "stack.npz"
         path.parent.mkdir(parents=True, exist_ok=True)
         grid_io.save_grids(path, gbmin, cell, res, occ, sd, thermal, em)
@@ -118,7 +128,7 @@ class RouterSession:
                 "weights": dict(w.get("weights", {})),
                 "connectivity": int(w.get("connectivity", 26)),
                 "priority": int(w.get("priority", 0)),
-                "clearance_m": float(w.get("clearance_m", 0.0)),
+                "clearance_m": 0.0,  # already baked into the voxel grid (compute_grids)
             })
 
         resp = self.client.solve_all(session_id, routes)
@@ -169,7 +179,7 @@ class RouterSession:
             "waypoints": [[float(x) for x in wp] for wp in wire.get("waypoints", [])],
             "weights": dict(wire.get("weights", {})),
             "connectivity": int(wire.get("connectivity", 26)),
-            "clearance_m": float(wire.get("clearance_m", 0.0)),
+            "clearance_m": 0.0,  # already baked into the voxel grid (compute_grids)
         }
         res = self.client.solve(session_id, route, locked_routes=locked_routes)
 

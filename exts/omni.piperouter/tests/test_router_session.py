@@ -51,14 +51,24 @@ def test_clearance_affects_route_all(solver_server):
     spec = wire_library.as_spec(wire_library.by_id(wire_library.load_wire_library(), "sig_can"))
 
     def route(clearance):
-        session.voxelize_scene(stage, f"c{clearance}", resolution=40)
+        # clearance is baked into the voxel grid at voxelize time
+        session.voxelize_scene(stage, f"c{clearance}", resolution=40, clearance_m=clearance)
         wire = {"name": "g", "spec": spec, "start": list(start), "end": list(end),
-                "connectivity": 6, "clearance_m": clearance}
+                "connectivity": 6}
         results, _ = session.route_all(stage, f"c{clearance}", [wire])
         return results[0]["status"]
 
     assert route(0.0) == "routed"     # gap is open
     assert route(0.5) == "no_path"    # clearance seals the 0.6 m gap
+
+
+def test_clearance_bakes_more_prohibited_voxels(cube_stage):
+    # the core mental model: more clearance -> more prohibited voxels in the grid
+    session = RouterSession()   # compute_grids is local; no solver needed
+    g0 = session.compute_grids(cube_stage, resolution=24, clearance_m=0.0)
+    g1 = session.compute_grids(cube_stage, resolution=24, clearance_m=0.3)
+    occ0, occ1 = g0[3], g1[3]
+    assert int(occ1.sum()) > int(occ0.sum())
 
 
 def test_grid_includes_markers_beyond_geometry(solver_server, cube_stage):

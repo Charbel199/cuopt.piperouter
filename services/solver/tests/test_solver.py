@@ -83,6 +83,29 @@ def test_endpoint_on_surface_still_routes(empty_stack):
     assert res.status == "routed"    # freed because it has open neighbours
 
 
+def test_route_interior_never_enters_clearance_zone():
+    # the route's interior cells must all be OUTSIDE the (radius+clearance) keep-out —
+    # clearance is hard. (Endpoints may sit on a surface, so they're excluded.)
+    from piperouter_solver.grids import GridStack
+    from piperouter_solver.models import GridFrame
+    frame = GridFrame(bounds_min=np.zeros(3), cell_size=0.1, res_xyz=(20, 20, 3))
+    occ = np.zeros((20, 20, 3), np.uint8)
+    occ[8:12, 6:14, :] = 1  # a block the route must go around
+    s = GridStack(frame=frame, occupancy=occ,
+                  surface_dist=np.full((20, 20, 3), 5.0, np.float32),
+                  thermal=np.full((20, 20, 3), 20.0, np.float32),
+                  em=np.zeros((20, 20, 3), np.float32))
+    wire = _wire()
+    clr = 0.3
+    res = Solver().route_one(s, RouteRequest(
+        wire=wire, start=tuple(frame.grid_to_world((1, 10, 1))),
+        end=tuple(frame.grid_to_world((18, 10, 1))), connectivity=26, clearance_m=clr))
+    assert res.status == "routed"
+    blocked = s.dilate_occupancy(wire.radius_m + clr).astype(bool)
+    for c in res.cells[1:-1]:           # exclude the two endpoints
+        assert not blocked[c], f"route cell {c} is inside the clearance keep-out"
+
+
 def test_clearance_burying_endpoint_fails(empty_stack):
     s = empty_stack
     s.occupancy[5, :, :] = 1  # wall at x=5; both endpoints on the x<5 side

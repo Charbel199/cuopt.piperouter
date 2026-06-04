@@ -7,7 +7,7 @@ import carb
 import omni.ext
 import omni.usd
 
-from . import grid_io, scene_ops, voxelizer
+from . import scene_ops
 from .panel import PipeRouterPanel
 from .router_session import RouterSession
 
@@ -31,14 +31,14 @@ class PipeRouterExtension(omni.ext.IExt):
             self._url = url
         return self._session
 
-    def _voxelize(self, resolution, url):
+    def _voxelize(self, resolution, url, clearance_m=0.0):
         stage = self._get_stage()
         if stage is None:
             raise RuntimeError("no USD stage is open")
         s = self._ensure_session(url)
         self._counter += 1
         self._sid = f"sess_{self._counter}"
-        s.voxelize_scene(stage, self._sid, resolution=resolution)
+        s.voxelize_scene(stage, self._sid, resolution=resolution, clearance_m=clearance_m)
         return self._sid
 
     # --- operations called by the panel ------------------------------------
@@ -85,7 +85,18 @@ class PipeRouterExtension(omni.ext.IExt):
             carb.log_info(f"[piperouter] Route All: {len(wires)} wire(s) at resolution "
                           f"{resolution}, safety clearance {clr} m")
             s = self._ensure_session(url)
-            self._voxelize(resolution, url)
+            clr = wires[0].get("clearance_m", 0.0) if wires else 0.0
+            self._voxelize(resolution, url, clearance_m=clr)   # bakes clearance into the grid
+            cell = s.last_grids[1] if getattr(s, "last_grids", None) else None
+            self._clearance_note = None
+            if cell:
+                keepout = int(clr / cell + 0.5 + 1e-9)
+                carb.log_info(f"[piperouter] clearance {clr * 1000:.0f}mm = {keepout} prohibited "
+                              f"voxel-layer(s) (grid cell {cell * 1000:.0f}mm)")
+                if clr > 0 and clr < 0.5 * cell:
+                    self._clearance_note = (f"clearance {clr * 1000:.0f}mm < grid cell "
+                                            f"{cell * 1000:.0f}mm -> ignored; raise resolution")
+                    carb.log_warn(f"[piperouter] {self._clearance_note}")
             results, bom = s.route_all(self._get_stage(), self._sid, wires)
             routed = sum(1 for r in results if r["status"] == "routed")
             carb.log_info(f"[piperouter] Route All done: {routed}/{len(results)} routed, "
@@ -100,10 +111,14 @@ class PipeRouterExtension(omni.ext.IExt):
             s = self._ensure_session(url)
             # always re-voxelize: the grid is framed to include all current markers,
             # so a freshly-dragged waypoint (possibly beyond the geometry) is covered
-            self._voxelize(resolution, url)
+            clr = float(wire.get("clearance_m", 0.0))
+            self._voxelize(resolution, url, clearance_m=clr)   # bakes clearance into the grid
+            cell = s.last_grids[1] if getattr(s, "last_grids", None) else None
+            keepout = int(clr / cell + 0.5 + 1e-9) if cell else 0
             carb.log_info(f"[piperouter] re-route '{wire.get('name')}': "
                           f"{len(wire.get('waypoints', []))} waypoint(s), "
-                          f"{len(locked_wires)} locked obstacle(s)")
+                          f"{len(locked_wires)} locked, clearance {clr * 1000:.0f}mm "
+                          f"= {keepout} prohibited voxel-layer(s)")
             res, bom_row = s.refine_wire(self._get_stage(), self._sid, wire, locked_wires)
             carb.log_info(f"[piperouter] re-route '{wire.get('name')}' -> {res['status']}")
             return res, bom_row, None
@@ -132,16 +147,15 @@ class PipeRouterExtension(omni.ext.IExt):
             # avoids re-voxelizing); fall back to a fresh voxelize if not routed yet
             grids = getattr(s, "last_grids", None)
             if grids is not None:
+                # occ already has the safety clearance baked in (compute_grids)
                 gbmin, cell, res, occ, thermal, em = grids
             else:
-                gbmin, cell, res, occ, _sd, thermal, em = s.compute_grids(stage, resolution)
+                gbmin, cell, res, occ, _sd, thermal, em = s.compute_grids(
+                    stage, resolution, clearance_m=clearance_m)
             ambient = 20.0
 
             if mode == "occupancy":
-                # grow by the safety clearance (round-half-up cells), like the solver
-                occ_cells = int(float(clearance_m) / cell + 0.5 + 1e-9)
-                grown = grid_io.dilate_mask(occ > 0, occ_cells) if occ_cells > 0 else (occ > 0)
-                mask, vals, lo = grown, None, 0.0
+                mask, vals, lo = occ > 0, None, 0.0   # prohibited voxels (mesh + clearance)
             elif mode == "thermal":
                 mask, vals, lo = thermal > ambient + 0.5, thermal, ambient
             elif mode == "em":
@@ -183,21 +197,23 @@ class PipeRouterExtension(omni.ext.IExt):
             carb.log_error(f"[piperouter] overlay failed: {exc}")
             return str(exc)
 
-    def slice_views(self, routes, clearance_m=0.0, view_resolution=192, target_px=1024):
-        """Render the XY/XZ/YZ projection images. Voxelizes the scene at a dedicated
-        (higher) `view_resolution` so the obstacle maps are crisp regardless of the
-        routing resolution; routes are drawn as lines at ~`target_px`.
+    def slice_views(self, routes, target_px=1024):
+        """Render the XY/XZ/YZ projection images from the EXACT routing grid (last
+        voxelize), so the obstacles + clearance halo shown are precisely what the
+        router removed — the route can never appear to cross them. (Obstacles are at
+        the routing resolution; raise it for finer views + finer routing together.)
         `routes` = [{"points": [[x,y,z],...], "color": (r,g,b)}]."""
         try:
             from . import slices
-            stage = self._get_stage()
-            if stage is None:
-                return None, "no USD stage is open"
             s = self._ensure_session(self._url or "http://localhost:8000")
-            gbmin, cell, res, occ, _sd, thermal, _em = s.compute_grids(stage, view_resolution)
-            cells = int(float(clearance_m) / cell + 0.5 + 1e-9)
+            grids = getattr(s, "last_grids", None)
+            if grids is None:
+                return None, "route first (no voxel grids yet)"
+            gbmin, cell, res, occ, thermal, em = grids
+            # occ already includes the clearance keep-out (baked in compute_grids),
+            # so there's no separate halo to draw — show the prohibited voxels as-is
             imgs = slices.render_views(gbmin, cell, res, occ, thermal, routes,
-                                       clearance_cells=cells, target_px=target_px)
+                                       target_px=target_px)
             return imgs, None
         except Exception as exc:
             carb.log_error(f"[piperouter] slice views failed: {exc}")

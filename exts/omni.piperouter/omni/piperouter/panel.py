@@ -542,7 +542,8 @@ class PipeRouterPanel:
                     w["length_m"] = b["length_m"]
                     w["cost"] = b["cost"]
         self._last_bom = bom or []
-        self._progress.text = "done"
+        note = getattr(self._api, "_clearance_note", None)
+        self._progress.text = f"done — note: {note}" if note else "done"
         self._schedule(wires=True)
         self._bom.text = self._format_bom(self._last_bom)
         self._refresh_views()
@@ -588,8 +589,7 @@ class PipeRouterPanel:
             return
         routes = [{"points": w["polyline"], "color": self._types[w["type_index"]]["color"]}
                   for w in self._wires if w.get("polyline") and w["status"] == "routed"]
-        clearance = float(self._clearance.model.get_value_as_float())
-        imgs, err = self._api.slice_views(routes, clearance_m=clearance)
+        imgs, err = self._api.slice_views(routes)
         if err or not imgs:
             if err:
                 self._progress.text = f"views: {err}"
