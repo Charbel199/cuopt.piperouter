@@ -21,6 +21,7 @@ def load_wire_types(path: str | Path) -> dict[str, WireType]:
             max_temp_c=float(entry["max_temp_c"]),
             em_sensitivity=float(entry["em_sensitivity"]),
             color=tuple(float(c) for c in entry["color"]),
+            inner_diameter_mm=float(entry.get("inner_diameter_mm", 0.0)),
         )
         out[wt.id] = wt
     return out

@@ -60,6 +60,7 @@ class WireType:
     max_temp_c: float
     em_sensitivity: float
     color: tuple[float, float, float]
+    inner_diameter_mm: float = 0.0  # 0 = solid wire/cable (no bore)
 
     @property
     def radius_m(self) -> float:
@@ -78,6 +79,11 @@ class RouteRequest:
     # Extra safety margin (m) kept from meshes, ON TOP of the wire's own radius. 0 =
     # the route only needs to avoid the mesh itself (may run flush against surfaces).
     clearance_m: float = 0.0
+    # Optional pinned headings (unit world vectors). None = free (any direction).
+    # start_heading: direction the route must LEAVE the start cell.
+    # end_heading: direction the route must ARRIVE at the end cell.
+    start_heading: tuple[float, float, float] | None = None
+    end_heading: tuple[float, float, float] | None = None
 
 
 @dataclass

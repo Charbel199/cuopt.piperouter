@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from . import fields, smoothing
 from .backend import shortest_path
 from .lattice import ExpandedLatticeBuilder, LatticeBuilder
 from .models import RouteRequest, RouteResult, SolveReport
@@ -12,10 +13,12 @@ class Solver:
         self.builder = builder or ExpandedLatticeBuilder()
 
     def _solve_leg(self, stack, wire, weights, connectivity, start_cell, goal_cell,
-                   extra_obstacles, clearance_m=0.0):
+                   extra_obstacles, clearance_m=0.0,
+                   start_heading=None, goal_heading=None):
         g = self.builder.build(
             stack, wire, weights, connectivity, start_cell, goal_cell, extra_obstacles,
             clearance_m=clearance_m,
+            start_heading=start_heading, goal_heading=goal_heading,
         )
         path, _cost = shortest_path(
             g.src, g.dst, g.weight, g.n_nodes, g.source_id, g.sink_id
@@ -38,10 +41,13 @@ class Solver:
         cell_seq = [frame.world_to_grid(p) for p in waypts]
 
         all_cells: list[tuple[int, int, int]] = []
-        for a, b in zip(cell_seq[:-1], cell_seq[1:]):
+        n_legs = len(cell_seq) - 1
+        for li, (a, b) in enumerate(zip(cell_seq[:-1], cell_seq[1:])):
+            sh = req.start_heading if li == 0 else None
+            gh = req.end_heading if li == n_legs - 1 else None
             leg = self._solve_leg(
                 stack, req.wire, req.weights, req.connectivity, a, b, extra_obstacles,
-                clearance_m=req.clearance_m,
+                clearance_m=req.clearance_m, start_heading=sh, goal_heading=gh,
             )
             if leg is None:
                 return RouteResult(wire_id=req.wire.id, status="no_path")
@@ -50,6 +56,22 @@ class Solver:
             all_cells.extend(leg)
 
         polyline = [frame.grid_to_world(c) for c in all_cells]
+
+        # Fibre-neutre smoothing (cuSolver least-squares), hard-safe against the
+        # same prohibited voxels the lattice avoided. weights["smoothing"] == 0 -> off.
+        strength = float(req.weights.get("smoothing", 1.0))
+        if strength > 0.0 and len(polyline) >= 3:
+            blocked = (
+                stack.dilate_occupancy(req.wire.radius_m + req.clearance_m).astype(bool)
+                | fields.melt_mask(stack, req.wire)
+            )
+            if extra_obstacles is not None:
+                blocked |= np.asarray(extra_obstacles, dtype=bool)
+            polyline = [np.asarray(p, dtype=np.float64)
+                        for p in smoothing.smooth_path(
+                            polyline, frame, blocked, req.wire,
+                            req.start_heading, req.end_heading, strength)]
+
         length = 0.0
         for p, q in zip(polyline[:-1], polyline[1:]):
             length += float(np.linalg.norm(np.asarray(q) - np.asarray(p)))

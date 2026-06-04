@@ -7,6 +7,10 @@ import numpy as np
 
 from .fields import melt_mask, neighbor_offsets, soft_cost_field, turn_penalty
 
+# Heading-pin cone: a pinned departure/arrival heading only admits neighbor
+# offsets whose unit direction is within this half-angle of the pinned vector.
+_HEADING_COS = float(np.cos(np.pi / 4.0))  # 45 degrees
+
 
 @dataclass
 class LatticeGraph:
@@ -46,6 +50,7 @@ class ExpandedLatticeBuilder:
     def build(
         self, stack, wire, weights: dict, connectivity: int,
         start_cell, goal_cell, extra_obstacles=None, clearance_m=0.0,
+        start_heading=None, goal_heading=None,
     ) -> LatticeGraph:
         frame = stack.frame
         nx, ny, nz = frame.res_xyz
@@ -161,9 +166,27 @@ class ExpandedLatticeBuilder:
             dst_parts.append(np.broadcast_to(dst_node, (m, H)).reshape(-1))
             w_parts.append((base[:, None] + turn_lut[:, oi][None, :]).reshape(-1))
 
+        # Unit direction of each neighbor offset, for heading-pin cone tests.
+        offs_norm = np.linalg.norm(offs, axis=1, keepdims=True)
+        offs_dir = offs / offs_norm  # (H,3) unit vectors
+
+        def _cone_mask(heading):
+            if heading is None:
+                return np.ones(H, dtype=bool)
+            h = np.asarray(heading, dtype=np.float64)
+            n = np.linalg.norm(h)
+            if n <= 1e-9:
+                return np.ones(H, dtype=bool)
+            return (offs_dir @ (h / n)) >= _HEADING_COS
+
+        allowed_src = _cone_mask(start_heading)
+        allowed_goal = _cone_mask(goal_heading)
+
         # --- source -> first cell (no turn penalty; start has no entry heading) ---
         si, sj, sk = start_cell
         for oi in range(H):
+            if not allowed_src[oi]:
+                continue
             dx, dy, dz = (int(offs[oi, 0]), int(offs[oi, 1]), int(offs[oi, 2]))
             ni, nj, nk = si + dx, sj + dy, sk + dz
             if 0 <= ni < nx and 0 <= nj < ny and 0 <= nk < nz and free[ni, nj, nk]:
@@ -173,12 +196,14 @@ class ExpandedLatticeBuilder:
                 dst_parts.append(np.array([b_ord * H + oi], dtype=np.int64))
                 w_parts.append(np.array([base], dtype=np.float64))
 
-        # --- every heading-node at the goal cell -> sink (weight 0) ---
+        # --- goal heading-nodes within the arrival cone -> sink (weight 0) ---
         g_ord = int(cell_ord[goal_cell])
         if g_ord >= 0:
-            src_parts.append(g_ord * H + arange_h)
-            dst_parts.append(np.full(H, sink_id, dtype=np.int64))
-            w_parts.append(np.zeros(H, dtype=np.float64))
+            hs = np.nonzero(allowed_goal)[0].astype(np.int64)
+            if hs.size:
+                src_parts.append(g_ord * H + hs)
+                dst_parts.append(np.full(hs.size, sink_id, dtype=np.int64))
+                w_parts.append(np.zeros(hs.size, dtype=np.float64))
 
         if src_parts:
             src = np.concatenate(src_parts).astype(np.int32)

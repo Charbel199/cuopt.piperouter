@@ -15,6 +15,7 @@ class WireSpec(BaseModel):
     mass_per_m_kg: float = 0.0
     max_temp_c: float = 1.0e9
     em_sensitivity: float = 0.0
+    inner_diameter_mm: float = 0.0
     color: list[float] = Field(default_factory=lambda: [0.8, 0.8, 0.8])
 
     def to_wire_type(self) -> WireType:
@@ -25,6 +26,7 @@ class WireSpec(BaseModel):
             min_bend_radius_mm=self.min_bend_radius_mm,
             cost_per_m=self.cost_per_m, mass_per_m_kg=self.mass_per_m_kg,
             max_temp_c=self.max_temp_c, em_sensitivity=self.em_sensitivity,
+            inner_diameter_mm=self.inner_diameter_mm,
             color=(float(c[0]), float(c[1]), float(c[2])),
         )
 
@@ -38,6 +40,8 @@ class RouteSpec(BaseModel):
     connectivity: int = 26
     priority: int = 0
     clearance_m: float = 0.0
+    start_heading: list[float] | None = None
+    end_heading: list[float] | None = None
 
     def to_route_request(self) -> RouteRequest:
         return RouteRequest(
@@ -49,6 +53,8 @@ class RouteSpec(BaseModel):
             connectivity=self.connectivity,
             priority=self.priority,
             clearance_m=self.clearance_m,
+            start_heading=tuple(self.start_heading) if self.start_heading else None,
+            end_heading=tuple(self.end_heading) if self.end_heading else None,
         )
 
 

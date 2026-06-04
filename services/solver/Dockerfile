@@ -19,10 +19,11 @@ WORKDIR /app
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-# GPU backend (optional — never fails the build).
+# GPU backend (optional — never fails the build). cupy provides cuSPARSE/cuSOLVER
+# for the fibre-neutre smoothing least-squares; cudf/cugraph for the SSSP routing.
 RUN pip install --no-cache-dir --extra-index-url https://pypi.nvidia.com \
-        cugraph-cu12 cudf-cu12 \
-    || echo "WARN: cugraph wheels unavailable; service will use the scipy fallback"
+        cugraph-cu12 cudf-cu12 cupy-cuda12x \
+    || echo "WARN: GPU wheels unavailable; service will use the scipy/numpy fallback"
 
 COPY pyproject.toml wire_types.json ./
 COPY piperouter_solver ./piperouter_solver
