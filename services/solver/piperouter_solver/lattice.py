@@ -1,9 +1,26 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Protocol
 
 import numpy as np
+
+
+def _edge_array_module():
+    """numpy by default; cupy when PIPEROUTER_GPU_BUILD=1 and cupy is importable.
+
+    The expensive bulk edge assembly runs on this module: with cupy the ~tens-of-
+    millions of edges are built ON the GPU as cupy arrays, which cuGraph/cudf then
+    consume zero-copy (no host build, no CPU->GPU transfer). Falls back to numpy if
+    cupy isn't available, and the small per-cell masks stay on CPU regardless."""
+    if os.environ.get("PIPEROUTER_GPU_BUILD") == "1":
+        try:
+            import cupy as cp
+            return cp
+        except Exception:
+            return np
+    return np
 
 from .fields import melt_mask, neighbor_offsets, soft_cost_field, turn_penalty
 
@@ -269,9 +286,22 @@ class ExpandedLatticeBuilder:
                 )
 
         arange_h = np.arange(H, dtype=np.int64)
-        src_parts: list[np.ndarray] = []
-        dst_parts: list[np.ndarray] = []
-        w_parts: list[np.ndarray] = []
+        src_parts: list = []
+        dst_parts: list = []
+        w_parts: list = []
+
+        # Edge assembly runs on `xp` (cupy on GPU, else numpy). The small per-cell masks
+        # (free/cell_ord/soft) were built on CPU; push just those to the device once
+        # (a few MB), then the huge bulk-edge arrays are produced ON the device and
+        # never round-trip to host. Source/sink edges are tiny -> kept on CPU (numpy).
+        xp = _edge_array_module()
+        gpu_build = xp is not np
+        free_x = xp.asarray(free) if gpu_build else free
+        cell_ord_x = xp.asarray(cell_ord) if gpu_build else cell_ord
+        soft_x = xp.asarray(soft) if gpu_build else soft
+        arange_h_x = xp.asarray(arange_h) if gpu_build else arange_h
+        turn_lut_x = xp.asarray(turn_lut) if gpu_build else turn_lut
+        step_len_x = xp.asarray(step_len) if gpu_build else step_len
 
         # No-corner-cutting: a diagonal step (a -> a+offset) may only be taken if the
         # cells it squeezes BETWEEN are also free — otherwise the straight segment
@@ -297,24 +327,24 @@ class ExpandedLatticeBuilder:
             sz0, sz1 = max(0, -dz), nz - max(0, dz)
             if sx0 >= sx1 or sy0 >= sy1 or sz0 >= sz1:
                 continue
-            a_free = free[sx0:sx1, sy0:sy1, sz0:sz1]
-            b_free = free[sx0 + dx:sx1 + dx, sy0 + dy:sy1 + dy, sz0 + dz:sz1 + dz]
+            a_free = free_x[sx0:sx1, sy0:sy1, sz0:sz1]
+            b_free = free_x[sx0 + dx:sx1 + dx, sy0 + dy:sy1 + dy, sz0 + dz:sz1 + dz]
             valid = a_free & b_free
             # forbid corner-cutting: every in-between cell must be free too
             for ex, ey, ez in _intermediate_offsets((dx, dy, dz)):
-                valid = valid & free[sx0 + ex:sx1 + ex, sy0 + ey:sy1 + ey, sz0 + ez:sz1 + ez]
-            if not valid.any():
+                valid = valid & free_x[sx0 + ex:sx1 + ex, sy0 + ey:sy1 + ey, sz0 + ez:sz1 + ez]
+            if not bool(valid.any()):
                 continue
-            a_ord = cell_ord[sx0:sx1, sy0:sy1, sz0:sz1][valid]
-            b_ord = cell_ord[sx0 + dx:sx1 + dx, sy0 + dy:sy1 + dy, sz0 + dz:sz1 + dz][valid]
-            soft_b = soft[sx0 + dx:sx1 + dx, sy0 + dy:sy1 + dy, sz0 + dz:sz1 + dz][valid]
-            base = step_len[oi] * (1.0 + soft_b.astype(np.float64))  # (M,)
+            a_ord = cell_ord_x[sx0:sx1, sy0:sy1, sz0:sz1][valid]
+            b_ord = cell_ord_x[sx0 + dx:sx1 + dx, sy0 + dy:sy1 + dy, sz0 + dz:sz1 + dz][valid]
+            soft_b = soft_x[sx0 + dx:sx1 + dx, sy0 + dy:sy1 + dy, sz0 + dz:sz1 + dz][valid]
+            base = step_len_x[oi] * (1.0 + soft_b.astype(xp.float64))  # (M,)
             m = a_ord.shape[0]
             # each of the H entry headings of a -> the single dst node (b, oi)
-            src_parts.append((a_ord[:, None] * H + arange_h[None, :]).reshape(-1))
+            src_parts.append((a_ord[:, None] * H + arange_h_x[None, :]).reshape(-1))
             dst_node = (b_ord * H + oi)[:, None]  # (M, 1)
-            dst_parts.append(np.broadcast_to(dst_node, (m, H)).reshape(-1))
-            w_parts.append((base[:, None] + turn_lut[:, oi][None, :]).reshape(-1))
+            dst_parts.append(xp.broadcast_to(dst_node, (m, H)).reshape(-1))
+            w_parts.append((base[:, None] + turn_lut_x[:, oi][None, :]).reshape(-1))
 
         # Unit direction of each neighbor offset, for heading-pin cone tests.
         offs_norm = np.linalg.norm(offs, axis=1, keepdims=True)
@@ -365,13 +395,15 @@ class ExpandedLatticeBuilder:
                 w_parts.append(np.zeros(hs.size, dtype=np.float64))
 
         if src_parts:
-            src = np.concatenate(src_parts).astype(np.int32)
-            dst = np.concatenate(dst_parts).astype(np.int32)
-            weight = np.concatenate(w_parts).astype(np.float32)
+            # bulk parts are xp (device) arrays, source/sink parts are tiny numpy ones;
+            # xp.asarray unifies them (no-op on device, tiny transfer for the CPU ones).
+            src = xp.concatenate([xp.asarray(p) for p in src_parts]).astype(xp.int32)
+            dst = xp.concatenate([xp.asarray(p) for p in dst_parts]).astype(xp.int32)
+            weight = xp.concatenate([xp.asarray(p) for p in w_parts]).astype(xp.float32)
         else:
-            src = np.zeros(0, dtype=np.int32)
-            dst = np.zeros(0, dtype=np.int32)
-            weight = np.zeros(0, dtype=np.float32)
+            src = xp.zeros(0, dtype=xp.int32)
+            dst = xp.zeros(0, dtype=xp.int32)
+            weight = xp.zeros(0, dtype=xp.float32)
 
         return LatticeGraph(
             src=src, dst=dst, weight=weight, n_nodes=n_nodes,

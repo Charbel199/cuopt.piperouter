@@ -164,6 +164,15 @@ class PipeRouterPanel:
                     self._res.model.add_value_changed_fn(lambda m: self._update_readout())
                 self._readout = ui.Label("", style={"color": 0xFF999999})
                 with ui.HStack(height=0):
+                    ui.Label("Connectivity", width=110,
+                             tooltip="Moves allowed per step = graph size = SPEED. "
+                                     "Fast(6)=axis-only (blocky, ~4x faster); "
+                                     "Balanced(18)=+2D diagonals; Smooth(26)=+3D corners "
+                                     "(densest, slowest). Smoothing rounds all of them.")
+                    # index 0/1/2 -> 6/18/26; default Balanced (18)
+                    self._conn_combo = ui.ComboBox(1, "Fast (6)", "Balanced (18)",
+                                                   "Smooth (26)")
+                with ui.HStack(height=0):
                     ui.Label("Safety clearance (m)", width=130,
                              tooltip="Extra gap kept from meshes ON TOP of the wire's "
                                      "radius. 0 = the route may run flush against a "
@@ -324,6 +333,14 @@ class PipeRouterPanel:
 
     def _url_value(self):
         return self._default_url  # URL is fixed for now; Reconnect re-probes it
+
+    def _connectivity(self):
+        """6 / 18 / 26 from the Connectivity combo (index 0/1/2); default 18."""
+        combo = getattr(self, "_conn_combo", None)
+        if combo is None:
+            return 18
+        idx = int(combo.model.get_item_value_model().get_value_as_int())
+        return (6, 18, 26)[idx] if idx in (0, 1, 2) else 18
 
     def _update_readout(self):
         res = self._res.model.get_value_as_int()
@@ -702,7 +719,7 @@ class PipeRouterPanel:
         return {"name": w["name"], "spec": wire_library.as_spec(self._types[w["type_index"]]),
                 "start": [float(x) for x in start], "end": [float(x) for x in end],
                 "waypoints": wps, "weights": dict(w["weights"]),
-                "connectivity": 26, "priority": priority,
+                "connectivity": self._connectivity(), "priority": priority,
                 "clearance_m": float(self._clearance.model.get_value_as_float()),
                 "start_heading": list(sh) if sh else None,
                 "end_heading": list(eh) if eh else None}
