@@ -129,6 +129,8 @@ class RouterSession:
                 "connectivity": int(w.get("connectivity", 26)),
                 "priority": int(w.get("priority", 0)),
                 "clearance_m": 0.0,  # already baked into the voxel grid (compute_grids)
+                "start_heading": w.get("start_heading"),
+                "end_heading": w.get("end_heading"),
             })
 
         resp = self.client.solve_all(session_id, routes)
@@ -181,6 +183,8 @@ class RouterSession:
             "weights": dict(wire.get("weights", {})),
             "connectivity": int(wire.get("connectivity", 26)),
             "clearance_m": 0.0,  # already baked into the voxel grid (compute_grids)
+            "start_heading": wire.get("start_heading"),
+            "end_heading": wire.get("end_heading"),
         }
         res = self.client.solve(session_id, route, locked_routes=locked_routes)
 

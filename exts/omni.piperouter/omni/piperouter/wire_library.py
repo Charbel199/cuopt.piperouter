@@ -9,8 +9,9 @@ from pathlib import Path
 _DEFAULT = Path(__file__).resolve().parents[2] / "data" / "wire_types.json"
 
 _SPEC_KEYS = (
-    "id", "label", "kind", "outer_diameter_mm", "min_bend_radius_mm",
-    "cost_per_m", "mass_per_m_kg", "max_temp_c", "em_sensitivity", "color",
+    "id", "label", "kind", "outer_diameter_mm", "inner_diameter_mm",
+    "min_bend_radius_mm", "cost_per_m", "mass_per_m_kg", "max_temp_c",
+    "em_sensitivity", "color",
 )
 
 

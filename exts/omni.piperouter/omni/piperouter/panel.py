@@ -19,9 +19,9 @@ import omni.ui as ui
 import omni.usd
 from pxr import Tf, Usd
 
-from . import scene_ops, wire_library
+from . import headings, scene_ops, wire_library
 
-_WEIGHTS = ("surface", "bend", "thermal", "em")
+_WEIGHTS = ("surface", "bend", "thermal", "em", "smoothing")
 
 # Slider help — shown as tooltips so the soft constraints are self-explanatory.
 _WEIGHT_HELP = {
@@ -33,6 +33,9 @@ _WEIGHT_HELP = {
                 "°C (higher = avoid more; 0 = ignore heat)."),
     "em": ("EM avoid", "Steer away from EM sources, scaled by the wire type's EM "
            "sensitivity (higher = avoid more; 0 = ignore EM)."),
+    "smoothing": ("Smoothing", "Fibre-neutre curve smoothing strength (cuSolver). "
+                  "0 = off (raw grid path); higher = smoother, gentler curves. "
+                  "Always stays clear of obstacles."),
 }
 
 _DOT = {  # status -> ABGR color for the ● status dot
@@ -293,7 +296,7 @@ class PipeRouterPanel:
                 "weights": {k: 1.0 for k in _WEIGHTS}, "waypoints": [], "wp_counter": 0,
                 "locked": False, "polyline": None, "status": "unrouted",
                 "length_m": 0.0, "cost": 0.0, "combo": None, "name_model": None,
-                "_swatch": None}
+                "_swatch": None, "start_head_idx": 0, "end_head_idx": 0}
 
     def _add_wire(self):
         stage = self._get_stage()
@@ -444,6 +447,21 @@ class PipeRouterPanel:
                     # Re-route) so switching to another wire and back keeps it.
                     s.model.add_value_changed_fn(lambda m, kk=k: self._set_weight(kk, m))
                     self._sliders[k] = s
+            # Optional pinned departure/arrival headings (None = free).
+            ui.Label("Pinned headings (optional; None = free direction)",
+                     style={"color": 0xFF999999})
+            with ui.HStack(height=0):
+                ui.Label("Start heading", width=100,
+                         tooltip="Force the wire to LEAVE the start in this direction.")
+                start_combo = ui.ComboBox(w["start_head_idx"], *headings.HEADING_OPTIONS)
+                start_combo.model.add_item_changed_fn(
+                    lambda m, *_: self._set_heading("start_head_idx", m))
+            with ui.HStack(height=0):
+                ui.Label("End heading", width=100,
+                         tooltip="Force the wire to ARRIVE at the end in this direction.")
+                end_combo = ui.ComboBox(w["end_head_idx"], *headings.HEADING_OPTIONS)
+                end_combo.model.add_item_changed_fn(
+                    lambda m, *_: self._set_heading("end_head_idx", m))
             ui.Button("+ Add waypoint (route must pass through)",
                       clicked_fn=self._add_waypoint)
             if w["waypoints"]:
@@ -467,6 +485,14 @@ class PipeRouterPanel:
         if self._selected is None or self._selected >= len(self._wires):
             return
         self._wires[self._selected]["weights"][k] = float(model.get_value_as_float())
+
+    def _set_heading(self, key, model):
+        # Persist the chosen heading axis index into the selected wire so it
+        # survives switching wires (mirrors _set_weight for the sliders).
+        if self._selected is None or self._selected >= len(self._wires):
+            return
+        idx = int(model.get_item_value_model().get_value_as_int())
+        self._wires[self._selected][key] = idx
 
     def _add_waypoint(self):
         stage = self._get_stage()
@@ -512,11 +538,15 @@ class PipeRouterPanel:
             p = scene_ops.get_world_pos(stage, wp_path)
             if p is not None:
                 wps.append([float(x) for x in p])
+        sh = headings.axis_to_vector(headings.HEADING_OPTIONS[w.get("start_head_idx", 0)])
+        eh = headings.axis_to_vector(headings.HEADING_OPTIONS[w.get("end_head_idx", 0)])
         return {"name": w["name"], "spec": wire_library.as_spec(self._types[w["type_index"]]),
                 "start": [float(x) for x in start], "end": [float(x) for x in end],
                 "waypoints": wps, "weights": dict(w["weights"]),
                 "connectivity": 26, "priority": priority,
-                "clearance_m": float(self._clearance.model.get_value_as_float())}
+                "clearance_m": float(self._clearance.model.get_value_as_float()),
+                "start_heading": list(sh) if sh else None,
+                "end_heading": list(eh) if eh else None}
 
     def _on_route_all(self):
         pairs = [(w, self._gather_wire(w, i)) for i, w in enumerate(self._wires)]
