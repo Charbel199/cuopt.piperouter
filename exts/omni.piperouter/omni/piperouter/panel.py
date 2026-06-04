@@ -385,9 +385,9 @@ class PipeRouterPanel:
         key = f"wire_{self._key_counter}"
         self._key_counter += 1
         scene_ops.spawn_marker(stage, f"{scene_ops.MARKERS_SCOPE}/{key}_start",
-                               (0.0, 0.0, 0.0), color=(0.1, 0.9, 0.1), radius=0.12)
+                               (0.0, 0.0, 0.0), color=(0.1, 0.9, 0.1), radius=0.06)
         scene_ops.spawn_marker(stage, f"{scene_ops.MARKERS_SCOPE}/{key}_end",
-                               (0.5, 0.0, 0.0), color=(0.9, 0.1, 0.1), radius=0.12)
+                               (0.5, 0.0, 0.0), color=(0.9, 0.1, 0.1), radius=0.06)
         self._wires.append(self._new_wire(key, key))
         self._schedule(wires=True)
 

@@ -108,8 +108,40 @@ def diagnose_no_path(stack, wire, connectivity, start_cell, goal_cell,
         return ("Pinned end heading points straight into an obstacle. Clear that "
                 "direction or set the end heading to None.")
 
-    return ("No clear corridor between the two ends — obstacles or the safety clearance "
-            "seal every path. Lower the clearance, move a waypoint, or raise resolution.")
+    # Endpoints are usable but the path is sealed. Name the DOMINANT blocker along the
+    # straight start->end line so 'no corridor' isn't a dead end (e.g. it's the heat).
+    a = np.asarray(start_cell, dtype=np.float64)
+    b = np.asarray(goal_cell, dtype=np.float64)
+    steps = max(2, int(np.linalg.norm(b - a)) * 2)
+    counts = {"thermal": 0, "mesh": 0, "extra": 0, "clearance": 0}
+    for t in np.linspace(0.0, 1.0, steps):
+        c = tuple(int(round(v)) for v in (a + (b - a) * t))
+        if not _inb(c) or not blocked[c]:
+            continue
+        if melt[c] and not mesh_r[c] and not extra[c]:
+            counts["thermal"] += 1
+        elif mesh_r[c]:
+            counts["mesh"] += 1
+        elif extra[c]:
+            counts["extra"] += 1
+        else:
+            counts["clearance"] += 1
+    dom = max(counts, key=counts.get) if any(counts.values()) else None
+    if dom == "thermal":
+        return (f"No clear corridor — heat above this {wire.kind}'s {wire.max_temp_c:.0f}C "
+                f"rating blocks the direct path. Add a waypoint to route around the hot "
+                f"zone, or pick a higher-temperature type.")
+    if dom == "mesh":
+        return ("No clear corridor — obstacles block the direct path. Add a waypoint to "
+                "steer the route around them, or raise the grid resolution.")
+    if dom == "extra":
+        return ("No clear corridor — another routed wire blocks the direct path. Re-route "
+                "it, lock a different order, or add a waypoint.")
+    if dom == "clearance":
+        return ("No clear corridor — the safety clearance seals the direct path. Lower the "
+                "clearance or add a waypoint.")
+    return ("No clear corridor between the two ends — every path is sealed by obstacles or "
+            "clearance. Lower the clearance, add a waypoint, or raise resolution.")
 
 
 @dataclass
@@ -241,6 +273,21 @@ class ExpandedLatticeBuilder:
         dst_parts: list[np.ndarray] = []
         w_parts: list[np.ndarray] = []
 
+        # No-corner-cutting: a diagonal step (a -> a+offset) may only be taken if the
+        # cells it squeezes BETWEEN are also free — otherwise the straight segment
+        # clips a solid edge/corner. The "between" cells are the proper non-empty
+        # sub-vectors of the offset (zero out some of its non-zero components). A face
+        # move (one non-zero component) has none, so it is never restricted.
+        def _intermediate_offsets(off):
+            axes = [i for i in range(3) if off[i] != 0]
+            # RELAXED no-corner-cutting: only restrict 2D EDGE diagonals (two non-zero
+            # components) — require their two face cells free, which stops the obvious
+            # cube-edge clips. Full 3D corner moves (three non-zero) are left UNrestricted
+            # so the router still threads tight openings instead of over-detouring.
+            if len(axes) != 2:
+                return []
+            return [tuple(int(off[ax]) if ax == a else 0 for ax in range(3)) for a in axes]
+
         # --- bulk edges: every valid move (a -> b via offset oi), broadcast over
         #     the H entry headings of a ---
         for oi in range(H):
@@ -253,6 +300,9 @@ class ExpandedLatticeBuilder:
             a_free = free[sx0:sx1, sy0:sy1, sz0:sz1]
             b_free = free[sx0 + dx:sx1 + dx, sy0 + dy:sy1 + dy, sz0 + dz:sz1 + dz]
             valid = a_free & b_free
+            # forbid corner-cutting: every in-between cell must be free too
+            for ex, ey, ez in _intermediate_offsets((dx, dy, dz)):
+                valid = valid & free[sx0 + ex:sx1 + ex, sy0 + ey:sy1 + ey, sz0 + ez:sz1 + ez]
             if not valid.any():
                 continue
             a_ord = cell_ord[sx0:sx1, sy0:sy1, sz0:sz1][valid]
@@ -289,7 +339,16 @@ class ExpandedLatticeBuilder:
                 continue
             dx, dy, dz = (int(offs[oi, 0]), int(offs[oi, 1]), int(offs[oi, 2]))
             ni, nj, nk = si + dx, sj + dy, sk + dz
-            if 0 <= ni < nx and 0 <= nj < ny and 0 <= nk < nz and free[ni, nj, nk]:
+            if not (0 <= ni < nx and 0 <= nj < ny and 0 <= nk < nz and free[ni, nj, nk]):
+                continue
+            # the start's first step must not corner-cut either
+            cut = False
+            for ex, ey, ez in _intermediate_offsets((dx, dy, dz)):
+                ci, cj, ck = si + ex, sj + ey, sk + ez
+                if 0 <= ci < nx and 0 <= cj < ny and 0 <= ck < nz and not free[ci, cj, ck]:
+                    cut = True
+                    break
+            if not cut:
                 b_ord = int(cell_ord[ni, nj, nk])
                 base = step_len[oi] * (1.0 + float(soft[ni, nj, nk]))
                 src_parts.append(np.array([source_id], dtype=np.int64))

@@ -70,6 +70,33 @@ def test_smoothed_curve_stays_out_of_blocked():
         assert not blocked[idx]
 
 
+def test_waypoint_is_passed_through_exactly():
+    f = _frame()
+    blocked = np.zeros(f.res_xyz, dtype=bool)
+    # an L-shaped path; the corner point is a hard waypoint the curve must hit
+    G = ([f.grid_to_world((i, 5, 1)) for i in range(6)]
+         + [f.grid_to_world((5, j, 1)) for j in range(6, 12)])
+    wp_idx = 5   # the corner vertex
+    wp = np.asarray(G[wp_idx], float)
+    out = np.asarray(smoothing.smooth_path(G, f, blocked, _wire(), None, None, 8.0,
+                                           fixed_idx=[wp_idx]))
+    # some point on the smoothed curve coincides with the waypoint (hard pass-through)
+    dmin = float(np.min(np.linalg.norm(out - wp, axis=1)))
+    assert dmin < 1e-6
+
+
+def test_waypoint_free_means_curve_may_miss_it():
+    # without pinning, strong smoothing cuts the corner (so pinning is what guarantees it)
+    f = _frame()
+    blocked = np.zeros(f.res_xyz, dtype=bool)
+    G = ([f.grid_to_world((i, 5, 1)) for i in range(6)]
+         + [f.grid_to_world((5, j, 1)) for j in range(6, 12)])
+    wp = np.asarray(G[5], float)
+    out = np.asarray(smoothing.smooth_path(G, f, blocked, _wire(), None, None, 8.0))
+    dmin = float(np.min(np.linalg.norm(out - wp, axis=1)))
+    assert dmin > 1e-6   # the rounded curve pulls away from the un-pinned corner
+
+
 def test_tangency_pins_first_segment_to_heading():
     f = _frame()
     blocked = np.zeros(f.res_xyz, dtype=bool)

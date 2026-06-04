@@ -41,6 +41,7 @@ class Solver:
         cell_seq = [frame.world_to_grid(p) for p in waypts]
 
         all_cells: list[tuple[int, int, int]] = []
+        wp_cell_idx: list[int] = []   # index in all_cells of each waypoint's cell
         n_legs = len(cell_seq) - 1
         for li, (a, b) in enumerate(zip(cell_seq[:-1], cell_seq[1:])):
             sh = req.start_heading if li == 0 else None
@@ -58,8 +59,37 @@ class Solver:
             if all_cells and leg and all_cells[-1] == leg[0]:
                 leg = leg[1:]
             all_cells.extend(leg)
+            if li < n_legs - 1 and all_cells:
+                wp_cell_idx.append(len(all_cells) - 1)   # this leg ended at a waypoint
 
-        polyline = [frame.grid_to_world(c) for c in all_cells]
+        # Build the world polyline. Anchor it to the ACTUAL endpoint markers (the start
+        # cell isn't in all_cells — the source links to a NEIGHBOUR of it — and markers
+        # sit at sub-cell positions, so otherwise the tube looks detached). Replace each
+        # waypoint's cell centre with the EXACT waypoint marker, and mark start /
+        # waypoints / end as hard points the smoother must pass through (waypoints are a
+        # hard requirement; a free tangent there keeps the pass-through smooth).
+        cell_world = [np.asarray(frame.grid_to_world(c), dtype=np.float64) for c in all_cells]
+        wpset = set(wp_cell_idx)
+        for k, ci in enumerate(wp_cell_idx):
+            if k < len(req.waypoints):
+                cell_world[ci] = np.asarray(req.waypoints[k], dtype=np.float64)
+
+        pts = [np.asarray(req.start, dtype=np.float64)]
+        flags = [True]
+        for j, p in enumerate(cell_world):
+            pts.append(p)
+            flags.append(j in wpset)
+        pts.append(np.asarray(req.end, dtype=np.float64))
+        flags.append(True)
+
+        polyline, fixed_flags = [], []
+        for p, fx in zip(pts, flags):
+            if polyline and float(np.linalg.norm(p - polyline[-1])) <= 1e-6:
+                fixed_flags[-1] = fixed_flags[-1] or fx   # merge a near-duplicate
+                continue
+            polyline.append(p)
+            fixed_flags.append(fx)
+        fixed_idx = [i for i, fx in enumerate(fixed_flags) if fx]
 
         # Fibre-neutre smoothing (cuSolver least-squares), hard-safe against the
         # same prohibited voxels the lattice avoided. weights["smoothing"] == 0 -> off.
@@ -74,7 +104,8 @@ class Solver:
             polyline = [np.asarray(p, dtype=np.float64)
                         for p in smoothing.smooth_path(
                             polyline, frame, blocked, req.wire,
-                            req.start_heading, req.end_heading, strength)]
+                            req.start_heading, req.end_heading, strength,
+                            fixed_idx=fixed_idx)]
 
         length = 0.0
         for p, q in zip(polyline[:-1], polyline[1:]):

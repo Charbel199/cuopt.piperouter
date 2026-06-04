@@ -1,6 +1,21 @@
 import numpy as np
 
-from piperouter_solver.backend import shortest_path
+from piperouter_solver.backend import _walk_predecessors, shortest_path
+
+
+def test_walk_predecessors_reachable():
+    preds = {3: 2, 2: 1, 1: 0}          # sink 3 -> 2 -> 1 -> source 0
+    assert _walk_predecessors(lambda n: preds[n], 3, 0) == [0, 1, 2, 3]
+
+
+def test_walk_predecessors_unreachable_deadends_to_none():
+    # cuGraph's unreachable marker: sink's predecessor is -1 (never reaches source)
+    preds = {3: -1}
+    assert _walk_predecessors(lambda n: preds[n], 3, 0) is None
+
+
+def test_walk_predecessors_source_equals_sink():
+    assert _walk_predecessors(lambda n: -1, 0, 0) == [0]
 
 
 def test_finds_cheapest_of_two_paths():

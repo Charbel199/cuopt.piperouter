@@ -184,6 +184,38 @@ def test_route_all_orders_by_priority_and_avoids_earlier(empty_stack):
     assert first_cells.isdisjoint(second_cells)  # no shared cells
 
 
+def _cuts_edge(a, b, occ):
+    """True if a->b is a 2D EDGE diagonal (exactly two non-zero components) that
+    squeezes between two occupied face cells. The relaxed rule forbids exactly this;
+    3D corner moves are intentionally allowed, so they are not checked here."""
+    off = tuple(int(b[i] - a[i]) for i in range(3))
+    axes = [i for i in range(3) if off[i] != 0]
+    if len(axes) != 2:
+        return False
+    for ax in axes:
+        c = tuple(a[i] + (off[i] if i == ax else 0) for i in range(3))
+        if occ[c]:
+            return True
+    return False
+
+
+def test_no_edge_corner_cutting_around_block(empty_stack):
+    s = empty_stack
+    # the two cells a 2D (4,4)->(5,5) edge diagonal would squeeze between
+    s.occupancy[5, 4, 1] = 1
+    s.occupancy[4, 5, 1] = 1
+    start = tuple(s.frame.grid_to_world((4, 4, 1)))
+    end = tuple(s.frame.grid_to_world((5, 5, 1)))
+    res = Solver().route_one(s, RouteRequest(wire=_wire(), start=start, end=end,
+                                             connectivity=26, weights={"smoothing": 0.0}))
+    assert res.status == "routed"
+    occ = s.occupancy.astype(bool)
+    start_cell = s.frame.world_to_grid(start)
+    full = [tuple(int(v) for v in start_cell)] + [tuple(c) for c in res.cells]
+    for a, b in zip(full[:-1], full[1:]):
+        assert not _cuts_edge(a, b, occ), f"step {a}->{b} cuts a 2D edge"
+
+
 def test_no_path_reason_thermal(empty_stack):
     s = empty_stack
     s.thermal[0:3, :, :] = 300.0   # a hot slab around the start, no cool neighbour
@@ -204,6 +236,30 @@ def test_no_path_reason_buried_in_geometry(empty_stack):
                                              connectivity=26))
     assert res.status == "no_path"
     assert "buried" in res.reason
+
+
+def test_no_path_reason_corridor_blocked_by_heat(empty_stack):
+    s = empty_stack
+    s.thermal[5, :, :] = 300.0   # a hot wall (melt) separates two cool endpoints
+    start = tuple(s.frame.grid_to_world((0, 5, 1)))
+    end = tuple(s.frame.grid_to_world((9, 5, 1)))
+    res = Solver().route_one(s, RouteRequest(wire=_wire(max_temp=90.0), start=start,
+                                             end=end, connectivity=26))
+    assert res.status == "no_path"
+    # the 'no corridor' message must call out the heat, not be generic
+    assert "rating" in res.reason or "heat" in res.reason
+
+
+def test_routed_polyline_connects_to_markers(empty_stack):
+    s = empty_stack
+    start = tuple(s.frame.grid_to_world((1, 5, 1)))
+    end = tuple(s.frame.grid_to_world((8, 5, 1)))
+    res = Solver().route_one(s, RouteRequest(wire=_wire(), start=start, end=end,
+                                             connectivity=26, weights={"smoothing": 0.0}))
+    assert res.status == "routed"
+    # the polyline must START at the start marker and END at the end marker exactly
+    assert np.allclose(res.polyline[0], start)
+    assert np.allclose(res.polyline[-1], end)
 
 
 def test_no_path_reason_no_corridor(empty_stack):

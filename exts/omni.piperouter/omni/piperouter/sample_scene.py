@@ -10,7 +10,7 @@ SAMPLE_ROOT = "/World/Sample"
 
 # Overall size of the sample bay (world units). Bump this to make it bigger.
 SCALE = 4.0
-MARKER_RADIUS = 0.04 * SCALE  # draggable markers, sized to the scene
+MARKER_RADIUS = 0.02 * SCALE  # draggable markers, sized to the scene (small)
 
 # Base (unit) layout, scaled by SCALE on build. Each descriptor: name (unique route
 # id), wire-type id, and world endpoints.
@@ -132,7 +132,7 @@ def build_complex_scene(stage):
         if temp_c is not None or em is not None:
             scene_ops.write_tags(mesh.GetPrim(), temp_c=temp_c, em=em)
 
-    radius = 0.04 * s
+    radius = 0.02 * s
     out = []
     for name, type_id, start, end in COMPLEX_WIRES:
         ws, we = sc(start), sc(end)

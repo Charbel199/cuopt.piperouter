@@ -15,6 +15,8 @@ Backend mirrors backend.py: cuSolver via cupy on GPU, scipy.sparse on CPU.
 """
 from __future__ import annotations
 
+import os
+
 import numpy as np
 
 _W_DATA = 1.0       # default fidelity weight (stay near the grid path)
@@ -33,15 +35,19 @@ def _unit(v):
 
 
 def _densify(G, max_seg):
-    """Resample so each segment <= max_seg; returns (M,3) anchor points."""
+    """Resample so each segment <= max_seg. Returns (points (M,3), idx_map) where
+    idx_map[i] is the output index of original point G[i] (kept exactly), so callers
+    can re-locate hard-fixed points (endpoints, waypoints) after densification."""
     G = np.asarray(G, dtype=np.float64)
     out = [G[0]]
+    idx_map = [0]
     for a, b in zip(G[:-1], G[1:]):
         seg = float(np.linalg.norm(b - a))
         n = max(1, int(np.ceil(seg / max_seg))) if max_seg > 0 else 1
         for k in range(1, n + 1):
             out.append(a + (b - a) * (k / n))
-    return np.asarray(out, dtype=np.float64)
+        idx_map.append(len(out) - 1)
+    return np.asarray(out, dtype=np.float64), idx_map
 
 
 def _in_blocked(P, frame, blocked):
@@ -56,52 +62,65 @@ def _in_blocked(P, frame, blocked):
 
 
 def _solve_normal(A, B):
-    """Least-squares solve of A x = B (B has 3 columns) via normal equations.
-    cuSolver/cupy if available, else scipy. Returns (N,3) ndarray."""
-    try:
-        import cupy as cp
-        import cupyx.scipy.sparse as csp
-        import cupyx.scipy.sparse.linalg as csla
+    """Least-squares solve of A x = B (B has 3 columns) via the normal equations.
+    Returns (N,3) ndarray.
 
-        Ag = csp.csr_matrix(A.astype(np.float64))
-        AtA = (Ag.T @ Ag).tocsr()
-        Bg = cp.asarray(B, dtype=cp.float64)
-        AtB = Ag.T @ Bg
-        out = cp.empty((A.shape[1], 3), dtype=cp.float64)
-        for j in range(3):
-            out[:, j] = csla.spsolve(AtA, AtB[:, j])
-        return cp.asnumpy(out)
-    except Exception:
-        from scipy.sparse.linalg import spsolve
+    CPU (scipy) by default — and on purpose. The smoothing system is tiny (a few hundred
+    points), so scipy solves it in microseconds. The GPU (cupy / cuSOLVER) path is OFF by
+    default because running cupy in the SAME long-lived server process as cuGraph
+    intermittently crashed the worker (a CUDA-context / RMM-allocator interaction), with
+    no real speedup at this size. Set PIPEROUTER_GPU_SMOOTH=1 to opt back into the GPU
+    solve (the cuGraph routing always stays on the GPU regardless)."""
+    if os.environ.get("PIPEROUTER_GPU_SMOOTH") == "1":
+        try:
+            import cupy as cp
+            import cupyx.scipy.sparse as csp
+            import cupyx.scipy.sparse.linalg as csla
 
-        AtA = (A.T @ A).tocsc()
-        AtB = A.T @ B
-        out = np.empty((A.shape[1], 3), dtype=np.float64)
-        for j in range(3):
-            out[:, j] = spsolve(AtA, AtB[:, j])
-        return out
+            Ag = csp.csr_matrix(A.astype(np.float64))
+            AtA = (Ag.T @ Ag).tocsr()
+            Bg = cp.asarray(B, dtype=cp.float64)
+            AtB = Ag.T @ Bg
+            out = cp.empty((A.shape[1], 3), dtype=cp.float64)
+            for j in range(3):
+                out[:, j] = csla.spsolve(AtA, AtB[:, j])
+            return cp.asnumpy(out)
+        except Exception:
+            pass
+
+    from scipy.sparse.linalg import spsolve
+
+    AtA = (A.T @ A).tocsc()
+    AtB = A.T @ B
+    out = np.empty((A.shape[1], 3), dtype=np.float64)
+    for j in range(3):
+        out[:, j] = spsolve(AtA, AtB[:, j])
+    return out
 
 
-def _build_ls(anchors, pin_mask, w_curv, start, end, h0, hN, d):
-    """Assemble sparse A (R,N) and dense B (R,3) for the per-axis LS problem."""
+def _build_ls(anchors, pin_mask, fixed, w_curv, h0, hN, d):
+    """Assemble sparse A (R,N) and dense B (R,3) for the per-axis LS problem.
+
+    `fixed` = indices pinned hard IN PLACE (endpoints + waypoints): the curve must pass
+    exactly through them, but their tangent is free, so curvature minimisation makes the
+    pass-through smooth (continuous tangent)."""
     from scipy.sparse import csr_matrix
 
     N = len(anchors)
     wd = np.full(N, _W_DATA, dtype=np.float64)
-    wd[0] = wd[-1] = _W_FIX
+    for i in fixed:
+        wd[i] = _W_FIX
     if h0 is not None:
-        wd[1] = _W_TAN
+        wd[1] = max(wd[1], _W_TAN)
     if hN is not None:
-        wd[N - 2] = _W_TAN
-    wd[pin_mask] = _W_PIN
+        wd[N - 2] = max(wd[N - 2], _W_TAN)
+    wd[pin_mask] = np.maximum(wd[pin_mask], _W_PIN)
 
-    targets = anchors.copy()
-    targets[0] = start
-    targets[-1] = end
-    if h0 is not None:
-        targets[1] = start + d * h0          # P1 = start + d*h0  -> leaves along h0
-    if hN is not None:
-        targets[N - 2] = end - d * hN        # P_{N-2} = end - d*hN -> enters along hN
+    targets = anchors.copy()                 # fixed points pin to their own anchor
+    if h0 is not None and 1 not in fixed:
+        targets[1] = anchors[0] + d * h0     # P1 = start + d*h0  -> leaves along h0
+    if hN is not None and (N - 2) not in fixed:
+        targets[N - 2] = anchors[-1] - d * hN  # P_{N-2} = end - d*hN -> enters along hN
 
     rows, cols, vals = [], [], []
     B = []
@@ -123,23 +142,32 @@ def _build_ls(anchors, pin_mask, w_curv, start, end, h0, hN, d):
     return A, np.asarray(B, dtype=np.float64)
 
 
-def smooth_path(G, frame, blocked, wire, start_heading, end_heading, strength):
+def smooth_path(G, frame, blocked, wire, start_heading, end_heading, strength,
+                fixed_idx=None):
     """Return a smoothed, hard-safe polyline (list of (3,) points).
 
     G: grid polyline (world points). strength: >0 smoothing weight (0 = off).
     blocked: bool occupancy (mesh+radius+clearance+melt) the curve must avoid.
+    fixed_idx: indices in G the curve must pass through EXACTLY (waypoints). The two
+    endpoints (0 and len(G)-1) are always fixed. Fixed points keep a free tangent, so
+    the curve sweeps smoothly THROUGH them rather than kinking.
     """
     G = np.asarray(G, dtype=np.float64)
     strength = float(strength)
     if strength <= 0.0 or len(G) < 3:
         return [tuple(float(x) for x in p) for p in G]
 
-    anchors = _densify(G, 0.5 * frame.cell_size)
+    anchors, idx_map = _densify(G, 0.5 * frame.cell_size)
     N = len(anchors)
     if N < 3:
         return [tuple(float(x) for x in p) for p in anchors]
 
-    start, end = anchors[0].copy(), anchors[-1].copy()
+    # densified indices that are hard-fixed (endpoints + any requested waypoints)
+    want = set(fixed_idx or ())
+    want |= {0, len(G) - 1}
+    fixed = sorted({idx_map[i] for i in want if 0 <= i < len(G)})
+    fixed_set = set(fixed)
+
     h0, hN = _unit(start_heading), _unit(end_heading)
     d = float(frame.cell_size)
     # stiffer pipes (bigger min bend) round more; scale curvature by strength.
@@ -148,10 +176,10 @@ def smooth_path(G, frame, blocked, wire, start_heading, end_heading, strength):
     pin_mask = np.zeros(N, dtype=bool)
     P = anchors
     for _ in range(_MAX_ITERS):
-        A, B = _build_ls(anchors, pin_mask, w_curv, start, end, h0, hN, d)
+        A, B = _build_ls(anchors, pin_mask, fixed_set, w_curv, h0, hN, d)
         P = _solve_normal(A, B)
         inside = _in_blocked(P, frame, blocked)
-        inside[0] = inside[-1] = False        # endpoints are terminals, never re-pinned
+        inside[fixed] = False                 # never re-pin hard points (ends/waypoints)
         new = inside & ~pin_mask
         if not new.any():
             break
@@ -159,6 +187,6 @@ def smooth_path(G, frame, blocked, wire, start_heading, end_heading, strength):
 
     # Final guarantee: anything still inside collapses to its safe grid anchor.
     inside = _in_blocked(P, frame, blocked)
-    inside[0] = inside[-1] = False
+    inside[fixed] = False
     P[inside] = anchors[inside]
     return [tuple(float(x) for x in p) for p in P]

@@ -52,11 +52,26 @@ def _cugraph_sssp(src, dst, weight, n_nodes, source_id, sink_id):
     sink_cost = float(res.loc[sink_id, "distance"])
     if not np.isfinite(sink_cost):
         return None, float("inf")
-    path = []
-    node = sink_id
-    while node != -1 and node != source_id:
-        path.append(int(node))
-        node = int(res.loc[node, "predecessor"])
-    path.append(source_id)
-    path.reverse()
+    path = _walk_predecessors(lambda n: res.loc[n, "predecessor"], sink_id, source_id)
+    if path is None:
+        return None, float("inf")
     return path, sink_cost
+
+
+def _walk_predecessors(pred_of, sink_id, source_id):
+    """Rebuild sink->source by following predecessors; reverse to source->sink.
+
+    Returns None if the chain dead-ends (predecessor -1) before reaching the source —
+    i.e. the sink is unreachable. cuGraph marks unreachable vertices with a large FINITE
+    sentinel distance (not inf) + predecessor -1, so the distance check alone can miss
+    it; this catch prevents returning a bogus straight-through "route"."""
+    path = []
+    node = int(sink_id)
+    while node != -1 and node != source_id:
+        path.append(node)
+        node = int(pred_of(node))
+    if node != source_id:
+        return None
+    path.append(int(source_id))
+    path.reverse()
+    return path
