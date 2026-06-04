@@ -62,6 +62,30 @@ def test_clearance_affects_route_all(solver_server):
     assert route(0.5) == "no_path"    # clearance seals the 0.6 m gap
 
 
+def test_no_path_reason_flows_through_http(solver_server):
+    # a wire whose end is buried in a solid block -> no_path with an explanatory
+    # reason that survives the solver schema + HTTP round-trip into the BOM row.
+    from pxr import Usd, UsdGeom
+    stage = Usd.Stage.CreateInMemory()
+    UsdGeom.Xform.Define(stage, "/World")
+    scene_ops.author_box_mesh(stage, "/World/block", (1.0, 0.5, 0.5), (0.6, 0.6, 0.6))
+    start, end = (0.1, 0.5, 0.5), (1.0, 0.5, 0.5)  # end sits inside the block
+    scene_ops.spawn_marker(stage, f"{scene_ops.MARKERS_SCOPE}/b_start", start, radius=0.05)
+    scene_ops.spawn_marker(stage, f"{scene_ops.MARKERS_SCOPE}/b_end", end, radius=0.05)
+
+    base, grid_dir = solver_server
+    session = RouterSession(grid_dir=grid_dir, solver_url=base)
+    session.voxelize_scene(stage, "nb", resolution=32)
+    spec = wire_library.as_spec(wire_library.by_id(wire_library.load_wire_library(), "sig_can"))
+    wire = {"name": "buried", "spec": spec, "start": list(start), "end": list(end),
+            "connectivity": 26}
+    results, bom = session.route_all(stage, "nb", [wire])
+
+    assert results[0]["status"] == "no_path"
+    assert results[0]["reason"]            # reason present in the HTTP result
+    assert bom[0]["reason"]                # ...and carried into the BOM row
+
+
 def test_clearance_bakes_more_prohibited_voxels(cube_stage):
     # the core mental model: more clearance -> more prohibited voxels in the grid
     session = RouterSession()   # compute_grids is local; no solver needed

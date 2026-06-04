@@ -93,6 +93,7 @@ class RouteResult:
     polyline: list = field(default_factory=list)  # list of (3,) world points
     length_m: float = 0.0
     cells: list = field(default_factory=list)      # occupied (i,j,k) for obstacle reuse
+    reason: str = ""             # human-readable explanation when status == "no_path"
 
 
 @dataclass

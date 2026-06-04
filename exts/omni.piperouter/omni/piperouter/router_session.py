@@ -143,7 +143,8 @@ class RouterSession:
             spec = w["spec"]
             if res["status"] != "routed":
                 bom.append({"wire_id": res["wire_id"], "status": res["status"],
-                            "length_m": 0.0, "cost": 0.0, "mass": 0.0})
+                            "length_m": 0.0, "cost": 0.0, "mass": 0.0,
+                            "reason": res.get("reason", "")})
                 continue
             diameter = max(float(spec["outer_diameter_mm"]) / 1000.0, MIN_DISPLAY_DIAMETER_M)
             color = spec.get("color", (0.8, 0.1, 0.1))
@@ -202,5 +203,6 @@ class RouterSession:
                        "mass": length * float(spec.get("mass_per_m_kg", 0.0))}
         else:
             bom_row = {"wire_id": res["wire_id"], "status": res["status"],
-                       "length_m": 0.0, "cost": 0.0, "mass": 0.0}
+                       "length_m": 0.0, "cost": 0.0, "mass": 0.0,
+                       "reason": res.get("reason", "")}
         return res, bom_row

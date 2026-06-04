@@ -79,6 +79,7 @@ class RouteOut(BaseModel):
     status: str
     polyline: list[list[float]] = Field(default_factory=list)
     length_m: float = 0.0
+    reason: str = ""
 
 
 class SolveAllOut(BaseModel):

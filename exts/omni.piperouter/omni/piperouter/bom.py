@@ -32,6 +32,7 @@ def summarize(bom, type_labels=None):
             "mass": mass,
             "cost": cost,
             "status": b.get("status", "?"),
+            "reason": b.get("reason", ""),
         })
         if routed:
             n_routed += 1

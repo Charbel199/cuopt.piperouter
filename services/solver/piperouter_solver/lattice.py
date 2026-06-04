@@ -11,6 +11,106 @@ from .fields import melt_mask, neighbor_offsets, soft_cost_field, turn_penalty
 # offsets whose unit direction is within this half-angle of the pinned vector.
 _HEADING_COS = float(np.cos(np.pi / 4.0))  # 45 degrees
 
+# 6-connectivity neighbour offsets (used for endpoint reachability / freeing).
+_NB6 = ((1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1))
+
+
+def diagnose_no_path(stack, wire, connectivity, start_cell, goal_cell,
+                     extra_obstacles=None, clearance_m=0.0,
+                     start_heading=None, goal_heading=None):
+    """Explain WHY a leg has no path, using the SAME hard masks build() applies.
+
+    Mirrors how build() wires endpoints: the SOURCE links to free NEIGHBOURS of the
+    start cell (a pinned heading restricts which neighbours count), and the goal must
+    itself be free/freeable and approachable. So we classify, in order: start
+    unreachable -> start blocker; start free but heading kills it -> heading; same for
+    goal; otherwise 'no corridor'. Returns a one-line human-readable string."""
+    frame = stack.frame
+    nx, ny, nz = frame.res_xyz
+    melt = melt_mask(stack, wire)
+    mesh_r = stack.dilate_occupancy(wire.radius_m).astype(bool)
+    extra = (np.asarray(extra_obstacles, dtype=bool) if extra_obstacles is not None
+             else np.zeros((nx, ny, nz), dtype=bool))
+    base = mesh_r | melt | extra
+    clearance_m = float(clearance_m)
+    if clearance_m > 0.0:
+        blocked = stack.dilate_occupancy(wire.radius_m + clearance_m).astype(bool) | melt | extra
+    else:
+        blocked = base
+    free_base = ~base
+    thermal = stack.thermal
+    offs = np.asarray(neighbor_offsets(connectivity), dtype=np.int64)
+    offs_dir = offs / np.linalg.norm(offs, axis=1, keepdims=True)
+
+    def _inb(c):
+        return 0 <= c[0] < nx and 0 <= c[1] < ny and 0 <= c[2] < nz
+
+    def _reachable(c):  # has a mesh-free 6-neighbour (build's endpoint-freeing test)
+        for d in _NB6:
+            n = (c[0] + d[0], c[1] + d[1], c[2] + d[2])
+            if _inb(n) and free_base[n]:
+                return True
+        return False
+
+    def _neighbours(cell, heading, sign):
+        """(has_free, has_free_in_cone) over the start/goal cell's neighbours. sign=+1
+        for the start (departure offset), -1 for the goal (the cell it's entered FROM)."""
+        c = np.asarray(cell, dtype=np.int64)
+        hn = None
+        if heading is not None:
+            h = np.asarray(heading, dtype=np.float64)
+            ln = np.linalg.norm(h)
+            hn = h / ln if ln > 1e-9 else None
+        has_free = has_cone = False
+        for oi in range(len(offs)):
+            n = tuple(int(v) for v in (c + sign * offs[oi]))
+            if not _inb(n) or blocked[n]:
+                continue
+            has_free = True
+            if hn is None or float(offs_dir[oi] @ hn) >= _HEADING_COS:
+                has_cone = True
+        return has_free, has_cone
+
+    def _blocker(cell, label):
+        """Name the dominant hard blocker AT the cell or its nearest blocked neighbour."""
+        c = tuple(int(v) for v in cell)
+        cand = [c] + [tuple(int(v) for v in (np.asarray(c) + o)) for o in offs]
+        cand = [x for x in cand if _inb(x)]
+        for x in cand:
+            if melt[x] and not mesh_r[x] and not extra[x]:
+                return (f"{label} is in a {thermal[x]:.0f}C zone, hotter than this "
+                        f"{wire.kind}'s {wire.max_temp_c:.0f}C rating. Move it away from "
+                        f"the heat source or pick a higher-temperature type.")
+        for x in cand:
+            if mesh_r[x]:
+                return f"{label} is buried inside an obstacle (no open space around it)."
+        for x in cand:
+            if extra[x]:
+                return f"{label} overlaps another already-routed wire."
+        return (f"{label} sits inside the {clearance_m * 1000:.0f}mm safety-clearance "
+                f"keep-out. Lower the safety clearance or move the endpoint out of it.")
+
+    # --- start: source needs a free neighbour (within the heading cone if pinned) ---
+    s_free, s_cone = _neighbours(start_cell, start_heading, +1)
+    if not s_free:
+        return _blocker(start_cell, "Start")
+    if not s_cone:
+        return ("Pinned start heading points straight into an obstacle. Clear that "
+                "direction or set the start heading to None.")
+
+    # --- goal: must itself be free/freeable AND approachable (cone if pinned) ---
+    g = tuple(int(v) for v in goal_cell)
+    g_ok = (not blocked[g]) or (base[g] and _reachable(g))
+    g_free, g_cone = _neighbours(goal_cell, goal_heading, -1)
+    if not g_ok or not g_free:
+        return _blocker(goal_cell, "End")
+    if not g_cone:
+        return ("Pinned end heading points straight into an obstacle. Clear that "
+                "direction or set the end heading to None.")
+
+    return ("No clear corridor between the two ends — obstacles or the safety clearance "
+            "seal every path. Lower the clearance, move a waypoint, or raise resolution.")
+
 
 @dataclass
 class LatticeGraph:

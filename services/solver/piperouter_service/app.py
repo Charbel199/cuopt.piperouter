@@ -31,6 +31,7 @@ def _route_out(res: RouteResult) -> RouteOut:
         status=res.status,
         polyline=[[float(x) for x in p] for p in res.polyline],
         length_m=float(res.length_m),
+        reason=getattr(res, "reason", "") or "",
     )
 
 

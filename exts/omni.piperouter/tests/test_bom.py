@@ -32,6 +32,12 @@ def test_no_path_row_present_but_zeroed():
     assert sig["cost"] == 0.0 and sig["length_m"] == 0.0
 
 
+def test_reason_is_carried_through():
+    rows = [{"wire_id": "x", "status": "no_path", "reason": "Start is too hot"}]
+    s = bom.summarize(rows)
+    assert s["rows"][0]["reason"] == "Start is too hot"
+
+
 def test_empty():
     s = bom.summarize([])
     assert s["rows"] == [] and s["total_cost"] == 0.0 and s["n_routed"] == 0

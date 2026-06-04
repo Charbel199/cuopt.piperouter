@@ -4,7 +4,7 @@ import numpy as np
 
 from . import fields, smoothing
 from .backend import shortest_path
-from .lattice import ExpandedLatticeBuilder, LatticeBuilder
+from .lattice import ExpandedLatticeBuilder, LatticeBuilder, diagnose_no_path
 from .models import RouteRequest, RouteResult, SolveReport
 
 
@@ -50,7 +50,11 @@ class Solver:
                 clearance_m=req.clearance_m, start_heading=sh, goal_heading=gh,
             )
             if leg is None:
-                return RouteResult(wire_id=req.wire.id, status="no_path")
+                reason = diagnose_no_path(
+                    stack, req.wire, req.connectivity, a, b, extra_obstacles,
+                    clearance_m=req.clearance_m, start_heading=sh, goal_heading=gh,
+                )
+                return RouteResult(wire_id=req.wire.id, status="no_path", reason=reason)
             if all_cells and leg and all_cells[-1] == leg[0]:
                 leg = leg[1:]
             all_cells.extend(leg)

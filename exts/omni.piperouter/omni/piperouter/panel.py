@@ -280,6 +280,7 @@ class PipeRouterPanel:
             ui.Rectangle(height=1, style={"background_color": 0xFF444444})
             for r in s["rows"]:
                 routed = r["status"] == "routed"
+                reason = r.get("reason", "")
                 with ui.HStack(height=0, spacing=4):
                     ui.Label(r["wire_id"], width=120)
                     ui.Label(r["type"], width=130, style={"color": 0xFFAAAAAA})
@@ -287,9 +288,14 @@ class PipeRouterPanel:
                     ui.Label(f"{r['mass']:.2f} kg" if routed else "—", width=64)
                     ui.Label(f"${r['cost']:.2f}" if routed else "—", width=64)
                     ui.Rectangle(width=12, height=12,
-                                 tooltip="routed" if routed else "no path",
+                                 tooltip=reason if (not routed and reason) else
+                                         ("routed" if routed else "no path"),
                                  style={"background_color": _DOT.get(r["status"], 0xFF888888),
                                         "border_radius": 6})
+                # spell out WHY a wire failed, right under its row
+                if not routed and reason:
+                    ui.Label(f"   -> {reason}", word_wrap=True,
+                             style={"color": _BAD, "font_size": 12})
             ui.Rectangle(height=1, style={"background_color": 0xFF444444})
             # totals row
             with ui.HStack(height=0, spacing=4):
@@ -369,7 +375,7 @@ class PipeRouterPanel:
                 "weights": {k: 1.0 for k in _WEIGHTS}, "waypoints": [], "wp_counter": 0,
                 "locked": False, "polyline": None, "status": "unrouted",
                 "length_m": 0.0, "cost": 0.0, "combo": None, "name_model": None,
-                "_swatch": None, "start_head_idx": 0, "end_head_idx": 0}
+                "_swatch": None, "start_head_idx": 0, "end_head_idx": 0, "reason": ""}
 
     def _add_wire(self):
         stage = self._get_stage()
@@ -450,8 +456,12 @@ class PipeRouterPanel:
                         # type color swatch
                         w["_swatch"] = ui.Rectangle(width=12, height=12,
                                                     style={"background_color": _abgr(color)})
-                        # status chip (green routed / red no-path / blue locked / grey)
-                        ui.Rectangle(width=12, height=12, tooltip=status,
+                        # status chip (green routed / red no-path / blue locked / grey);
+                        # hover a no-path chip to see WHY it failed
+                        chip_tip = status
+                        if w["status"] == "no_path" and w.get("reason"):
+                            chip_tip = f"no path: {w['reason']}"
+                        ui.Rectangle(width=12, height=12, tooltip=chip_tip,
                                      style={"background_color": _DOT.get(status, _DOT["unrouted"]),
                                             "border_radius": 6})
                         nm = ui.StringField(width=90)
@@ -523,6 +533,10 @@ class PipeRouterPanel:
                 ui.Label(f"{w['name']}", style={"font_size": 16})
                 ui.Label(f"· {self._type_labels[w['type_index']]}",
                          style={"color": 0xFFAAAAAA})
+            # if this wire failed to route, spell out why
+            if w["status"] == "no_path" and w.get("reason"):
+                ui.Label(f"No path: {w['reason']}", word_wrap=True,
+                         style={"color": _BAD})
             ui.Label("Soft constraints (0 = ignore, 10 = strong). Hover for details.",
                      style={"color": 0xFF999999})
             self._sliders = {}
@@ -711,6 +725,7 @@ class PipeRouterPanel:
             if r:
                 w["status"] = r["status"]
                 w["polyline"] = r.get("polyline") if r["status"] == "routed" else None
+                w["reason"] = r.get("reason", "") if r["status"] != "routed" else ""
         for b in (bom or []):
             for w in self._wires:
                 if w["name"] == b["wire_id"]:
@@ -748,6 +763,7 @@ class PipeRouterPanel:
             return
         w["status"] = result["status"] if result else "no_path"
         w["polyline"] = result.get("polyline") if w["status"] == "routed" else None
+        w["reason"] = result.get("reason", "") if result and w["status"] != "routed" else ""
         if bom_row:
             w["length_m"] = bom_row["length_m"]
             w["cost"] = bom_row["cost"]
@@ -755,7 +771,8 @@ class PipeRouterPanel:
             # reflects the re-route without needing a full Route All
             self._last_bom = [b for b in self._last_bom if b["wire_id"] != bom_row["wire_id"]]
             self._last_bom.append(bom_row)
-        self._progress.text = f"{w['name']}: {w['status']}"
+        self._progress.text = (f"{w['name']}: {w['status']}"
+                               + (f" — {w['reason']}" if w["reason"] else ""))
         self._schedule(wires=True, bom=True)
         self._refresh_views()
         self._refresh_overlay()

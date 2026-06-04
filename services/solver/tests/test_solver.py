@@ -184,6 +184,59 @@ def test_route_all_orders_by_priority_and_avoids_earlier(empty_stack):
     assert first_cells.isdisjoint(second_cells)  # no shared cells
 
 
+def test_no_path_reason_thermal(empty_stack):
+    s = empty_stack
+    s.thermal[0:3, :, :] = 300.0   # a hot slab around the start, no cool neighbour
+    start = tuple(s.frame.grid_to_world((0, 5, 1)))
+    end = tuple(s.frame.grid_to_world((9, 5, 1)))
+    res = Solver().route_one(s, RouteRequest(wire=_wire(max_temp=90.0), start=start,
+                                             end=end, connectivity=26))
+    assert res.status == "no_path"
+    assert "rating" in res.reason and "300C" in res.reason   # thermal explanation
+
+
+def test_no_path_reason_buried_in_geometry(empty_stack):
+    s = empty_stack
+    s.occupancy[:, :, :] = 1       # whole scene solid
+    start = tuple(s.frame.grid_to_world((2, 2, 1)))
+    end = tuple(s.frame.grid_to_world((7, 7, 1)))
+    res = Solver().route_one(s, RouteRequest(wire=_wire(), start=start, end=end,
+                                             connectivity=26))
+    assert res.status == "no_path"
+    assert "buried" in res.reason
+
+
+def test_no_path_reason_no_corridor(empty_stack):
+    s = empty_stack
+    s.occupancy[5, :, :] = 1       # full wall: both endpoints free but disconnected
+    start = tuple(s.frame.grid_to_world((0, 5, 1)))
+    end = tuple(s.frame.grid_to_world((9, 5, 1)))
+    res = Solver().route_one(s, RouteRequest(wire=_wire(), start=start, end=end,
+                                             connectivity=26))
+    assert res.status == "no_path"
+    assert "corridor" in res.reason
+
+
+def test_no_path_reason_impossible_heading(empty_stack):
+    s = empty_stack
+    start = tuple(s.frame.grid_to_world((0, 5, 1)))  # on the -X boundary
+    end = tuple(s.frame.grid_to_world((9, 5, 1)))
+    res = Solver().route_one(s, RouteRequest(
+        wire=_wire(), start=start, end=end, connectivity=26,
+        start_heading=(-1.0, 0.0, 0.0)))             # must leave -X off the edge
+    assert res.status == "no_path"
+    assert "heading" in res.reason
+
+
+def test_routed_wire_has_no_reason(empty_stack):
+    s = empty_stack
+    start = tuple(s.frame.grid_to_world((0, 5, 1)))
+    end = tuple(s.frame.grid_to_world((9, 5, 1)))
+    res = Solver().route_one(s, RouteRequest(wire=_wire(), start=start, end=end,
+                                             connectivity=26))
+    assert res.status == "routed" and res.reason == ""
+
+
 def test_pinned_start_heading_forces_first_move_direction(empty_stack):
     s = empty_stack
     start = tuple(s.frame.grid_to_world((2, 5, 1)))
