@@ -19,7 +19,8 @@ import omni.ui as ui
 import omni.usd
 from pxr import Tf, Usd
 
-from . import headings, scene_ops, wire_library
+from . import bom as bom_lib
+from . import headings, scene_ops, viewport_labels, waypoints, wire_library
 
 _WEIGHTS = ("surface", "bend", "thermal", "em", "smoothing")
 
@@ -71,6 +72,8 @@ class PipeRouterPanel:
         self._need_wires = False
         self._need_inspector = False
         self._need_tags = False
+        self._need_bom = False
+        self._vp_labels = viewport_labels.ViewportOrderLabels()
         self._window = ui.Window("PipeRouter", width=520, height=780)
         self._build()
 
@@ -201,6 +204,9 @@ class PipeRouterPanel:
                 self._tag_stack = ui.VStack(spacing=2, height=0)
                 self._rebuild_tags()
 
+    _TEMP_COLOR = 0xFF4466EE   # warm red-orange (thermal)
+    _EM_COLOR = 0xFFCCAA33     # teal-gold (EM)
+
     def _rebuild_tags(self):
         if self._window is None:
             return
@@ -208,26 +214,36 @@ class PipeRouterPanel:
         tags = self._api.list_tags()
         with self._tag_stack:
             if not tags:
-                ui.Label("  (none)", style={"color": 0xFF888888})
+                ui.Label("  (none — select a prim above and Tag it)",
+                         style={"color": 0xFF888888})
                 return
             for t in tags:
-                bits = []
-                if t["temp_c"] is not None:
-                    bits.append(f"{t['temp_c']:.0f}°C")
-                if t["em"] is not None:
-                    bits.append(f"EM {t['em']:.2f}")
+                has_t = t["temp_c"] is not None
+                has_e = t["em"] is not None
                 name = t["path"].rsplit("/", 1)[-1]
-                with ui.HStack(height=0, spacing=4):
-                    ui.Label(f"{name}  ({', '.join(bits)})", width=190,
-                             tooltip=t["path"])
-                    ui.Button("Locate", width=60,
+                # presence dot: warm if thermal, teal if EM-only
+                dot = self._TEMP_COLOR if has_t else self._EM_COLOR
+                with ui.HStack(height=0, spacing=6):
+                    ui.Rectangle(width=10, height=10, tooltip=t["path"],
+                                 style={"background_color": dot, "border_radius": 5})
+                    ui.Label(name, width=130, tooltip=t["path"])
+                    ui.Label(f"{t['temp_c']:.0f}°C" if has_t else "", width=52,
+                             style={"color": self._TEMP_COLOR})
+                    ui.Label(f"EM {t['em']:.2f}" if has_e else "", width=64,
+                             style={"color": self._EM_COLOR})
+                    ui.Spacer()
+                    ui.Button("Locate", width=58,
                               clicked_fn=lambda p=t["path"]: self._api.select_prim(p))
-                    ui.Button("Remove", width=60,
+                    ui.Button("Remove", width=58,
                               clicked_fn=lambda p=t["path"]: self._remove_tag(p))
 
     def _remove_tag(self, path):
         self._api.clear_tag(path)
         self._schedule(tags=True)
+
+    # BOM table column widths (px); shared by header + rows for alignment.
+    _BOM_COLS = (("Wire", 120), ("Type", 130), ("Length", 70), ("Mass", 64),
+                 ("Cost", 64), ("", 16))
 
     def _section_output(self):
         with ui.CollapsableFrame("Output / BOM", collapsed=False):
@@ -237,7 +253,51 @@ class PipeRouterPanel:
                     self._bom_path = ui.StringField()
                     self._bom_path.model.set_value("/tmp/piperouter_bom")
                     ui.Button("Export", width=70, clicked_fn=self._on_export)
-                self._bom = ui.Label("(no routes yet)", word_wrap=True)
+                # the table is rebuilt into this container by _rebuild_bom
+                self._bom_table = ui.VStack(spacing=2, height=0)
+        self._rebuild_bom()
+
+    def _rebuild_bom(self):
+        if self._window is None or getattr(self, "_bom_table", None) is None:
+            return
+        self._bom_table.clear()
+        s = bom_lib.summarize(self._last_bom, self._bom_type_labels())
+        with self._bom_table:
+            if not s["rows"]:
+                ui.Label("(no routes yet — Route All to populate)",
+                         style={"color": 0xFF888888})
+                return
+            # header row
+            with ui.HStack(height=0, spacing=4):
+                for title, wpx in self._BOM_COLS:
+                    ui.Label(title, width=wpx, style={"color": 0xFF999999, "font_size": 13})
+            ui.Rectangle(height=1, style={"background_color": 0xFF444444})
+            for r in s["rows"]:
+                routed = r["status"] == "routed"
+                with ui.HStack(height=0, spacing=4):
+                    ui.Label(r["wire_id"], width=120)
+                    ui.Label(r["type"], width=130, style={"color": 0xFFAAAAAA})
+                    ui.Label(f"{r['length_m']:.2f} m" if routed else "—", width=70)
+                    ui.Label(f"{r['mass']:.2f} kg" if routed else "—", width=64)
+                    ui.Label(f"${r['cost']:.2f}" if routed else "—", width=64)
+                    ui.Rectangle(width=12, height=12,
+                                 tooltip="routed" if routed else "no path",
+                                 style={"background_color": _DOT.get(r["status"], 0xFF888888),
+                                        "border_radius": 6})
+            ui.Rectangle(height=1, style={"background_color": 0xFF444444})
+            # totals row
+            with ui.HStack(height=0, spacing=4):
+                ui.Label(f"TOTAL ({s['n_routed']} routed"
+                         + (f", {s['n_no_path']} no-path" if s["n_no_path"] else "") + ")",
+                         width=250, style={"font_size": 14})
+                ui.Label(f"{s['total_length']:.2f} m", width=70, style={"font_size": 14})
+                ui.Label(f"{s['total_mass']:.2f} kg", width=64, style={"font_size": 14})
+                ui.Label(f"${s['total_cost']:.2f}", width=64,
+                         style={"font_size": 14, "color": _OK})
+
+    def _bom_type_labels(self):
+        """{wire_id -> wire-type label} so the BOM Type column is filled."""
+        return {w["name"]: self._type_labels[w["type_index"]] for w in self._wires}
 
     # ----------------------------------------------------------- connection
     def _check_connection(self):
@@ -265,10 +325,11 @@ class PipeRouterPanel:
     # omni.ui forbids clearing/rebuilding a container from inside an event/draw
     # callback ("Container::clear was called during an event or draw"). So event
     # handlers request a refresh and we rebuild on the next frame instead.
-    def _schedule(self, wires=False, inspector=False, tags=False):
+    def _schedule(self, wires=False, inspector=False, tags=False, bom=False):
         self._need_wires = self._need_wires or wires
         self._need_inspector = self._need_inspector or inspector
         self._need_tags = self._need_tags or tags
+        self._need_bom = self._need_bom or bom
         if self._refresh_pending:
             return
         self._refresh_pending = True
@@ -289,6 +350,12 @@ class PipeRouterPanel:
         if self._need_tags:
             self._need_tags = False
             self._rebuild_tags()
+        if self._need_bom:
+            self._need_bom = False
+            self._rebuild_bom()
+        # viewport order labels track marker drags / selection, refreshed every
+        # coalesced frame (cheap; reads stage positions for the selected wire)
+        self._refresh_vp_labels()
 
     # ----------------------------------------------------------------- wires
     def _new_wire(self, key, name, type_index=0):
@@ -371,7 +438,7 @@ class PipeRouterPanel:
                         w["_swatch"] = ui.Rectangle(width=12, height=12,
                                                     style={"background_color": _abgr(color)})
                         # status chip (green routed / red no-path / blue locked / grey)
-                        ui.Rectangle(width=12, height=12,
+                        ui.Rectangle(width=12, height=12, tooltip=status,
                                      style={"background_color": _DOT.get(status, _DOT["unrouted"]),
                                             "border_radius": 6})
                         nm = ui.StringField(width=90)
@@ -433,7 +500,16 @@ class PipeRouterPanel:
                 ui.Label("(select a wire above)", style={"color": 0xFF888888})
                 return
             w = self._wires[self._selected]
-            ui.Label(f"{w['name']}  ·  {self._type_labels[w['type_index']]}")
+            status = "locked" if w["locked"] else w["status"]
+            with ui.HStack(height=0, spacing=6):
+                ui.Rectangle(width=14, height=14,
+                             style={"background_color": _abgr(self._types[w["type_index"]]["color"])})
+                ui.Rectangle(width=14, height=14, tooltip=status,
+                             style={"background_color": _DOT.get(status, _DOT["unrouted"]),
+                                    "border_radius": 7})
+                ui.Label(f"{w['name']}", style={"font_size": 16})
+                ui.Label(f"· {self._type_labels[w['type_index']]}",
+                         style={"color": 0xFFAAAAAA})
             ui.Label("Soft constraints (0 = ignore, 10 = strong). Hover for details.",
                      style={"color": 0xFF999999})
             self._sliders = {}
@@ -465,13 +541,24 @@ class PipeRouterPanel:
             ui.Button("+ Add waypoint (route must pass through)",
                       clicked_fn=self._add_waypoint)
             if w["waypoints"]:
+                ui.Label("  drag the :: handle to reorder (order = route sequence)",
+                         style={"color": 0xFF888888})
                 for i, wp_path in enumerate(w["waypoints"]):
-                    with ui.HStack(height=0):
-                        ui.Label(f"  waypoint {i}", width=110)
-                        ui.Button("Locate", width=70,
+                    with ui.HStack(height=0, spacing=4) as row:
+                        # drag handle: starts a drag carrying this row's index
+                        handle = ui.Label("::", width=18, style={"color": 0xFFAAAAAA},
+                                          tooltip="Drag to reorder")
+                        handle.set_drag_fn(lambda j=i: str(j))
+                        ui.Label(f"#{i + 1}", width=34,
+                                 style={"color": 0xFFDDDDDD, "font_size": 15})
+                        ui.Button("Locate", width=64,
                                   clicked_fn=lambda p=wp_path: self._api.select_prim(p))
-                        ui.Button("Delete", width=70,
+                        ui.Button("Delete", width=64,
                                   clicked_fn=lambda j=i: self._delete_waypoint(j))
+                    # whole row is a drop target -> move dragged index to here
+                    row.set_accept_drop_fn(lambda *_: True)
+                    row.set_drop_fn(lambda e, dst=i: self._reorder_waypoint(
+                        int(e.mime_data), dst))
             else:
                 ui.Label("  (no waypoints)", style={"color": 0xFF888888})
             with ui.HStack(height=0):
@@ -526,6 +613,51 @@ class PipeRouterPanel:
         del w["waypoints"][idx]
         self._schedule(inspector=True)
 
+    def _reorder_waypoint(self, src, dst):
+        # drag-drop reorder of the selected wire's waypoints (order = route legs).
+        if self._selected is None or self._selected >= len(self._wires):
+            return
+        w = self._wires[self._selected]
+        w["waypoints"] = waypoints.reorder(w["waypoints"], src, dst)
+        self._schedule(inspector=True)  # re-numbers rows + refreshes viewport labels
+
+    def _refresh_vp_labels(self):
+        """Update the viewport order-number overlay for the SELECTED wire: S at the
+        start marker, 1..N above each waypoint (in route order), E at the end."""
+        vpl = getattr(self, "_vp_labels", None)
+        if vpl is None:
+            return
+        stage = self._get_stage()
+        if stage is None or self._selected is None or self._selected >= len(self._wires):
+            vpl.clear()
+            return
+        w = self._wires[self._selected]
+        up = self._stage_up_offset(stage)
+        items = []
+
+        def _add(path, text, color):
+            p = scene_ops.get_world_pos(stage, path)
+            if p is not None:
+                items.append(((p[0] + up[0], p[1] + up[1], p[2] + up[2]), text, color))
+
+        _add(f"{scene_ops.MARKERS_SCOPE}/{w['key']}_start", "S", 0xFF33CC33)  # green
+        for i, wp_path in enumerate(w["waypoints"]):
+            _add(wp_path, str(i + 1), 0xFFFFFFFF)
+        _add(f"{scene_ops.MARKERS_SCOPE}/{w['key']}_end", "E", 0xFF3333CC)    # red
+        vpl.update(items)
+
+    @staticmethod
+    def _stage_up_offset(stage):
+        """A small world-space offset along the stage up-axis, so labels float just
+        ABOVE their markers rather than sitting on them."""
+        try:
+            from pxr import UsdGeom
+            axis = UsdGeom.GetStageUpAxis(stage)
+            d = 0.25
+            return (0.0, d, 0.0) if axis == UsdGeom.Tokens.y else (0.0, 0.0, d)
+        except Exception:
+            return (0.0, 0.0, 0.25)
+
     # --------------------------------------------------------------- solving
     def _gather_wire(self, w, priority=0):
         stage = self._get_stage()
@@ -574,8 +706,7 @@ class PipeRouterPanel:
         self._last_bom = bom or []
         note = getattr(self._api, "_clearance_note", None)
         self._progress.text = f"done — note: {note}" if note else "done"
-        self._schedule(wires=True)
-        self._bom.text = self._format_bom(self._last_bom)
+        self._schedule(wires=True, bom=True)
         self._refresh_views()
         self._refresh_overlay()
 
@@ -607,8 +738,12 @@ class PipeRouterPanel:
         if bom_row:
             w["length_m"] = bom_row["length_m"]
             w["cost"] = bom_row["cost"]
+            # replace this wire's row in the BOM (or append if absent) so the table
+            # reflects the re-route without needing a full Route All
+            self._last_bom = [b for b in self._last_bom if b["wire_id"] != bom_row["wire_id"]]
+            self._last_bom.append(bom_row)
         self._progress.text = f"{w['name']}: {w['status']}"
-        self._schedule(wires=True)
+        self._schedule(wires=True, bom=True)
         self._refresh_views()
         self._refresh_overlay()
 
@@ -687,25 +822,14 @@ class PipeRouterPanel:
         except Exception as exc:
             self._progress.text = f"export error: {exc}"
 
-    @staticmethod
-    def _format_bom(bom):
-        lines, total_c, total_m = [], 0.0, 0.0
-        for b in bom:
-            if b["status"] == "routed":
-                lines.append(f"{b['wire_id']}: {b['length_m']:.2f} m   "
-                             f"${b['cost']:.2f}   {b['mass']:.2f} kg")
-                total_c += b["cost"]
-                total_m += b["mass"]
-            else:
-                lines.append(f"{b['wire_id']}: NO PATH")
-        lines.append(f"TOTAL: ${total_c:.2f}   {total_m:.2f} kg")
-        return "\n".join(lines)
-
     def destroy(self):
         if getattr(self, "_obj_listener", None) is not None:
             self._obj_listener.Revoke()
             self._obj_listener = None
         self._stage_sub = None
+        if getattr(self, "_vp_labels", None) is not None:
+            self._vp_labels.destroy()
+            self._vp_labels = None
         if self._window:
             self._window.destroy()
             self._window = None
