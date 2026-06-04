@@ -150,7 +150,13 @@ class PipeRouterPanel:
     def _section_setup(self):
         with ui.CollapsableFrame("Scene & Setup", collapsed=False):
             with ui.VStack(spacing=4, height=0):
-                ui.Button("Create sample scene", clicked_fn=self._create_sample, height=28)
+                with ui.HStack(height=0, spacing=4):
+                    ui.Button("Create sample scene", clicked_fn=self._create_sample,
+                              height=28, tooltip="Small engine-bay demo: 3 wires.")
+                    ui.Button("Create complex scene", clicked_fn=self._create_complex,
+                              height=28,
+                              tooltip="Full engine-bay + chassis: 15 obstacles, 14 "
+                                      "wires/pipes across all types.")
                 with ui.HStack(height=0):
                     ui.Label("Grid resolution", width=110)
                     self._res = ui.IntField()
@@ -318,8 +324,8 @@ class PipeRouterPanel:
         # Cells are uniform cubes: cell size = (longest scene axis) / resolution, and
         # the other axes get however many of those cubes fit. So `res` is the voxel
         # count along the LONGEST axis; spacing is identical on all three axes.
-        self._readout.text = (f"≈{res} voxels across the longest axis · uniform cubic "
-                              f"cells. Higher = finer but slower.")
+        self._readout.text = (f"~{res} voxels along the longest axis (uniform cubic "
+                              f"cells). Higher = finer detail, slower routing.")
 
     # ------------------------------------------------- deferred UI refresh
     # omni.ui forbids clearing/rebuilding a container from inside an event/draw
@@ -380,20 +386,27 @@ class PipeRouterPanel:
         self._schedule(wires=True)
 
     def _create_sample(self):
-        descriptors, err = self._api.create_sample_scene()
+        self._apply_scene(self._api.create_sample_scene(), "sample")
+
+    def _create_complex(self):
+        self._apply_scene(self._api.create_complex_scene(), "complex")
+
+    def _apply_scene(self, result, label):
+        """Load wire descriptors from a freshly-built scene into the panel."""
+        descriptors, err = result
         if err:
-            self._progress.text = f"sample scene: {err}"
+            self._progress.text = f"{label} scene: {err}"
             return
         self._wires = []
         self._selected = None
         self._key_counter = 0
         for d in descriptors:
             ti = self._type_ids.index(d["type_id"]) if d["type_id"] in self._type_ids else 0
-            # markers were authored by build_sample_scene under the descriptor name
+            # markers were authored by the scene builder under the descriptor name
             self._wires.append(self._new_wire(d["name"], d["name"], ti))
             self._key_counter += 1
         self._schedule(wires=True, inspector=True, tags=True)
-        self._progress.text = f"sample scene ready — {len(descriptors)} wires. Click ROUTE ALL."
+        self._progress.text = f"{label} scene ready — {len(descriptors)} wires. Click ROUTE ALL."
 
     def _delete_wire(self, idx):
         stage = self._get_stage()

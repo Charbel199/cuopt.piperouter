@@ -64,3 +64,81 @@ def build_sample_scene(stage):
                                end, color=(0.9, 0.1, 0.1), radius=MARKER_RADIUS)
         out.append({"name": w["name"], "type_id": w["type_id"], "start": start, "end": end})
     return out
+
+
+# ----------------------------------------------------------------- complex scene
+# A much fuller engine-bay + chassis: ~15 obstacles (engine, exhaust, transmission,
+# radiator, battery, ECUs, ABS, firewall halves, chassis rails) with thermal/EM
+# sources, and 14 wires/pipes spanning the bay using ALL wire + tube types. Built
+# under the SAME root as the sample scene, so the two buttons swap cleanly.
+COMPLEX_SCALE = 6.0
+
+# (name, center, size, color, temp_c, em) — base units (×COMPLEX_SCALE on build).
+COMPLEX_BOXES = [
+    ("ground",         (1.50, 1.00, -0.05), (3.40, 2.40, 0.05), (0.30, 0.30, 0.32), None, None),
+    ("engine_block",   (0.60, 1.00, 0.30),  (0.60, 0.70, 0.60), (0.55, 0.30, 0.20), 120.0, None),
+    ("exhaust",        (0.60, 0.55, 0.18),  (0.55, 0.14, 0.12), (0.45, 0.25, 0.22), 300.0, None),
+    ("transmission",   (1.20, 1.00, 0.22),  (0.50, 0.40, 0.40), (0.35, 0.35, 0.40), None, None),
+    ("radiator",       (0.15, 1.00, 0.35),  (0.08, 1.20, 0.70), (0.40, 0.45, 0.55), None, None),
+    ("coolant_tank",   (0.30, 0.40, 0.40),  (0.20, 0.20, 0.35), (0.20, 0.50, 0.55), None, None),
+    ("battery",        (0.30, 1.60, 0.25),  (0.30, 0.35, 0.40), (0.25, 0.45, 0.35), None, None),
+    ("alternator",     (0.55, 1.45, 0.45),  (0.22, 0.22, 0.22), (0.30, 0.40, 0.60), None, 0.7),
+    ("ecu_main",       (1.95, 1.60, 0.30),  (0.25, 0.35, 0.25), (0.25, 0.40, 0.60), None, 0.9),
+    ("ecu_aux",        (2.40, 0.40, 0.30),  (0.20, 0.25, 0.20), (0.25, 0.40, 0.55), None, 0.6),
+    ("abs_module",     (1.80, 0.60, 0.20),  (0.20, 0.20, 0.20), (0.40, 0.40, 0.45), None, 0.4),
+    ("firewall_a",     (1.55, 0.50, 0.35),  (0.10, 0.90, 0.70), (0.50, 0.50, 0.55), None, None),
+    ("firewall_b",     (1.55, 1.50, 0.35),  (0.10, 0.90, 0.70), (0.50, 0.50, 0.55), None, None),
+    ("chassis_rail_l", (1.50, 0.25, 0.10),  (3.00, 0.12, 0.12), (0.40, 0.40, 0.42), None, None),
+    ("chassis_rail_r", (1.50, 1.75, 0.10),  (3.00, 0.12, 0.12), (0.40, 0.40, 0.42), None, None),
+]
+
+# (name, wire-type id, start, end) — base units.
+COMPLEX_WIRES = [
+    ("batt_pwr_0",     "pwr_4awg",        (0.30, 1.60, 0.45), (1.95, 1.58, 0.45)),
+    ("starter_pwr_1",  "pwr_4awg",        (0.40, 1.25, 0.65), (1.00, 1.05, 0.65)),
+    ("alt_pwr_2",      "pwr_4awg",        (0.55, 1.45, 0.58), (0.32, 1.60, 0.50)),
+    ("ecu_aux_pwr_3",  "pwr_4awg",        (0.32, 1.55, 0.42), (2.40, 0.42, 0.35)),
+    ("can_eng_4",      "sig_can",         (0.62, 1.05, 0.55), (1.92, 1.55, 0.42)),
+    ("can_abs_5",      "sig_can",         (1.80, 0.62, 0.34), (1.95, 1.58, 0.42)),
+    ("can_exh_6",      "sig_can",         (0.65, 0.40, 0.40), (2.05, 1.45, 0.55)),
+    ("can_cabin_7",    "sig_can",         (1.62, 1.00, 0.50), (2.60, 1.00, 0.40)),
+    ("ac_8",           "ac_pipe_12",      (0.20, 0.42, 0.55), (2.00, 0.50, 0.40)),
+    ("coolant_in_9",   "coolant_hose_16", (0.30, 1.00, 0.50), (0.55, 1.00, 0.70)),
+    ("coolant_out_10", "coolant_hose_16", (0.60, 1.20, 0.70), (0.30, 1.20, 0.55)),
+    ("heater_11",      "coolant_hose_8",  (0.62, 1.00, 0.56), (2.00, 1.00, 0.45)),
+    ("brake_fl_12",    "brake_line_6",    (1.80, 0.60, 0.32), (0.20, 0.30, 0.18)),
+    ("brake_rl_13",    "brake_line_6",    (1.82, 0.62, 0.32), (2.60, 1.70, 0.18)),
+]
+
+
+def build_complex_scene(stage):
+    """Build a large engine-bay + chassis under SAMPLE_ROOT with many obstacles,
+    thermal/EM sources, and 14 wires/pipes (all types). Returns wire descriptors
+    (scaled world coords). Idempotent and replaces any prior sample/complex scene."""
+    for p in (SAMPLE_ROOT, scene_ops.MARKERS_SCOPE, scene_ops.ROUTES_SCOPE,
+              scene_ops.DEBUG_SCOPE):
+        _clear(stage, p)
+
+    UsdGeom.Xform.Define(stage, "/World")
+    UsdGeom.Scope.Define(stage, SAMPLE_ROOT)
+
+    s = COMPLEX_SCALE
+
+    def sc(t):
+        return tuple(float(v) * s for v in t)
+
+    for name, center, size, color, temp_c, em in COMPLEX_BOXES:
+        mesh = scene_ops.author_box_mesh(stage, f"{SAMPLE_ROOT}/{name}", sc(center), sc(size), color)
+        if temp_c is not None or em is not None:
+            scene_ops.write_tags(mesh.GetPrim(), temp_c=temp_c, em=em)
+
+    radius = 0.04 * s
+    out = []
+    for name, type_id, start, end in COMPLEX_WIRES:
+        ws, we = sc(start), sc(end)
+        scene_ops.spawn_marker(stage, f"{scene_ops.MARKERS_SCOPE}/{name}_start",
+                               ws, color=(0.1, 0.9, 0.1), radius=radius)
+        scene_ops.spawn_marker(stage, f"{scene_ops.MARKERS_SCOPE}/{name}_end",
+                               we, color=(0.9, 0.1, 0.1), radius=radius)
+        out.append({"name": name, "type_id": type_id, "start": ws, "end": we})
+    return out

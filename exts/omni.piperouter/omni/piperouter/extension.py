@@ -79,6 +79,19 @@ class PipeRouterExtension(omni.ext.IExt):
             carb.log_error(f"[piperouter] sample scene failed: {exc}")
             return None, str(exc)
 
+    def create_complex_scene(self):
+        from . import sample_scene
+        stage = self._get_stage()
+        if stage is None:
+            return None, "no USD stage is open"
+        try:
+            wires = sample_scene.build_complex_scene(stage)
+            carb.log_info(f"[piperouter] complex scene created with {len(wires)} wires")
+            return wires, None
+        except Exception as exc:
+            carb.log_error(f"[piperouter] complex scene failed: {exc}")
+            return None, str(exc)
+
     def route_all(self, wires, resolution, url):
         try:
             clr = wires[0].get("clearance_m", 0.0) if wires else 0.0
