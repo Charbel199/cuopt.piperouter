@@ -117,7 +117,7 @@ class PipeRouterExtension(omni.ext.IExt):
             keepout = int(clr / cell + 0.5 + 1e-9) if cell else 0
             carb.log_info(f"[piperouter] re-route '{wire.get('name')}': "
                           f"{len(wire.get('waypoints', []))} waypoint(s), "
-                          f"{len(locked_wires)} locked, clearance {clr * 1000:.0f}mm "
+                          f"avoiding {len(locked_wires)} other routed wire(s), clearance {clr * 1000:.0f}mm "
                           f"= {keepout} prohibited voxel-layer(s)")
             res, bom_row = s.refine_wire(self._get_stage(), self._sid, wire, locked_wires)
             carb.log_info(f"[piperouter] re-route '{wire.get('name')}' -> {res['status']}")

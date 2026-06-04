@@ -559,11 +559,14 @@ class PipeRouterPanel:
         if wire is None:
             self._progress.text = "wire has no endpoints"
             return
-        locked = [{"spec": wire_library.as_spec(self._types[lw["type_index"]]),
-                   "polyline": lw["polyline"]}
-                  for lw in self._wires if lw["locked"] and lw.get("polyline")]
+        # Every OTHER already-routed wire is an obstacle, so re-routing this one
+        # never overlaps the rest (wires must not overlap, even on single re-route).
+        # Locking is no longer required to be avoided — it now just freezes a wire.
+        obstacles = [{"spec": wire_library.as_spec(self._types[ow["type_index"]]),
+                      "polyline": ow["polyline"]}
+                     for ow in self._wires if ow is not w and ow.get("polyline")]
         self._progress.text = f"re-routing {w['name']}..."
-        result, bom_row, err = self._api.refine(wire, locked,
+        result, bom_row, err = self._api.refine(wire, obstacles,
                                                 self._res.model.get_value_as_int(),
                                                 self._url_value())
         if err:

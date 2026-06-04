@@ -157,8 +157,9 @@ class RouterSession:
         return resp["results"], bom
 
     def refine_wire(self, stage, session_id, wire, locked_wires):
-        """Re-route a single wire (honouring its waypoints + weights) while the
-        locked wires' tubes act as obstacles. Authors/replaces only this wire's tube.
+        """Re-route a single wire (honouring its waypoints + weights) while every
+        other routed wire in `locked_wires` acts as an obstacle, so the re-routed
+        wire never overlaps the rest. Authors/replaces only this wire's tube.
         Returns (result_dict, bom_row)."""
         locked_routes = []
         for lw in locked_wires:
