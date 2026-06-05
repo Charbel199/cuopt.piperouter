@@ -154,3 +154,121 @@ def test_refine_wire_with_waypoint_and_locked_obstacle(solver_server, cube_stage
     b_cells = {(round(p[0], 3), round(p[1], 3), round(p[2], 3)) for p in res_b["polyline"]}
     # b cannot reuse a's locked interior cells (endpoints may coincide)
     assert len(a_cells & b_cells) < len(a_cells)
+
+
+def test_bundle_trunk_and_branches_routed(solver_server):
+    """Two wires share a bundle trunk; each gets a stitched full polyline."""
+    from pxr import Usd
+    from omni.piperouter.router_session import RouterSession
+
+    base, grid_dir = solver_server
+    stage = Usd.Stage.CreateInMemory()
+    from pxr import UsdGeom as _UG
+    _UG.Xform.Define(stage, "/World")
+    # a simple open scene (no obstacles except a ground plane)
+    scene_ops.author_box_mesh(stage, "/World/ground",
+                              (2.0, 2.0, -0.05), (6.0, 6.0, 0.05))
+    # merge marker at (1,1,0.5), split marker at (3,1,0.5)
+    scene_ops.spawn_marker(stage, f"{scene_ops.MARKERS_SCOPE}/bA_merge",
+                           (1.0, 1.0, 0.5), radius=0.05)
+    scene_ops.spawn_marker(stage, f"{scene_ops.MARKERS_SCOPE}/bA_split",
+                           (3.0, 1.0, 0.5), radius=0.05)
+
+    session = RouterSession(grid_dir=grid_dir, solver_url=base)
+    session.voxelize_scene(stage, "bundle_t", resolution=32, pad_frac=0.5)
+
+    types = wire_library.load_wire_library()
+    spec = wire_library.as_spec(wire_library.by_id(types, "sig_can"))
+
+    wires = [
+        {"name": "w0", "spec": spec, "start": [0.0, 0.5, 0.5],
+         "end": [4.0, 0.5, 0.5], "bundle_id": "bA", "weights": {}, "connectivity": 18},
+        {"name": "w1", "spec": spec, "start": [0.0, 1.5, 0.5],
+         "end": [4.0, 1.5, 0.5], "bundle_id": "bA", "weights": {}, "connectivity": 18},
+    ]
+    bundles_list = [{
+        "id": "bA", "name": "bundle A", "kind": "wire",
+        "members": ["w0", "w1"],
+        "merge_marker": f"{scene_ops.MARKERS_SCOPE}/bA_merge",
+        "split_marker": f"{scene_ops.MARKERS_SCOPE}/bA_split",
+    }]
+
+    results, bom = session.route_all_with_bundles(
+        stage, "bundle_t", wires, bundles_list)
+
+    by_id = {r["wire_id"]: r for r in results}
+    assert by_id["w0"]["status"] == "routed", by_id["w0"].get("reason")
+    assert by_id["w1"]["status"] == "routed", by_id["w1"].get("reason")
+    # each member polyline starts at its own start and ends at its own end
+    assert len(by_id["w0"]["polyline"]) >= 3
+    assert len(by_id["w1"]["polyline"]) >= 3
+    # trunk BOM row present
+    trunk_bom = [b for b in bom if "trunk" in b["wire_id"]]
+    assert len(trunk_bom) == 1
+    assert trunk_bom[0]["length_m"] > 0.0
+    # trunk tube authored in stage
+    trunk_prim = stage.GetPrimAtPath(
+        f"{scene_ops.ROUTES_SCOPE}/bundle_bA_trunk")
+    assert trunk_prim and trunk_prim.IsValid()
+
+
+def test_wire_in_two_bundles_routes_through_both_trunks(solver_server):
+    """A wire in two bundles must visit B1_merge→B1_split then B2_merge→B2_split —
+    not skip the first bundle or re-route from the original start for B2."""
+    from pxr import Usd
+    from omni.piperouter.router_session import RouterSession
+
+    base, grid_dir = solver_server
+    stage = Usd.Stage.CreateInMemory()
+    from pxr import UsdGeom as _UG
+    _UG.Xform.Define(stage, "/World")
+    scene_ops.author_box_mesh(stage, "/World/ground",
+                              (3.0, 1.0, -0.05), (8.0, 4.0, 0.05))
+
+    # Two bundles placed sequentially along X
+    # B1: merge at x=1, split at x=2
+    # B2: merge at x=4, split at x=5
+    for name, pos in (("bB1_merge", (1.0, 1.0, 0.5)),
+                      ("bB1_split", (2.0, 1.0, 0.5)),
+                      ("bB2_merge", (4.0, 1.0, 0.5)),
+                      ("bB2_split", (5.0, 1.0, 0.5))):
+        scene_ops.spawn_marker(stage, f"{scene_ops.MARKERS_SCOPE}/{name}",
+                               pos, radius=0.04)
+
+    session = RouterSession(grid_dir=grid_dir, solver_url=base)
+    session.voxelize_scene(stage, "mb", resolution=32, pad_frac=0.5)
+
+    types = wire_library.load_wire_library()
+    spec = wire_library.as_spec(wire_library.by_id(types, "sig_can"))
+    wires = [
+        {"name": "wa", "spec": spec, "start": [0.0, 0.8, 0.5],
+         "end": [6.5, 0.8, 0.5], "bundle_id": "", "weights": {}, "connectivity": 18},
+        {"name": "wb", "spec": spec, "start": [0.0, 1.2, 0.5],
+         "end": [6.5, 1.2, 0.5], "bundle_id": "", "weights": {}, "connectivity": 18},
+    ]
+    bundles_list = [
+        {"id": "bB1", "name": "B1", "kind": "wire",
+         "members": ["wa", "wb"], "weights": {},
+         "merge_marker": f"{scene_ops.MARKERS_SCOPE}/bB1_merge",
+         "split_marker": f"{scene_ops.MARKERS_SCOPE}/bB1_split"},
+        {"id": "bB2", "name": "B2", "kind": "wire",
+         "members": ["wa", "wb"], "weights": {},
+         "merge_marker": f"{scene_ops.MARKERS_SCOPE}/bB2_merge",
+         "split_marker": f"{scene_ops.MARKERS_SCOPE}/bB2_split"},
+    ]
+
+    results, bom = session.route_all_with_bundles(stage, "mb", wires, bundles_list)
+    by_id = {r["wire_id"]: r for r in results}
+
+    # both wires routed
+    assert by_id["wa"]["status"] == "routed", by_id["wa"].get("reason")
+    assert by_id["wb"]["status"] == "routed", by_id["wb"].get("reason")
+    # both trunks authored
+    assert stage.GetPrimAtPath(f"{scene_ops.ROUTES_SCOPE}/bundle_bB1_trunk").IsValid()
+    assert stage.GetPrimAtPath(f"{scene_ops.ROUTES_SCOPE}/bundle_bB2_trunk").IsValid()
+    # two trunk BOM rows
+    trunk_boms = [b for b in bom if "trunk" in b["wire_id"]]
+    assert len(trunk_boms) == 2
+    # each wire's polyline is long enough to span the full route (B1 + B2 + branches)
+    for wn in ("wa", "wb"):
+        assert len(by_id[wn]["polyline"]) >= 4

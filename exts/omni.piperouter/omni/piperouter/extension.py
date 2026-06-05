@@ -119,6 +119,23 @@ class PipeRouterExtension(omni.ext.IExt):
             carb.log_error(f"[piperouter] route_all failed: {exc}")
             return None, None, str(exc)
 
+    def route_all_bundles(self, wires, bundles, resolution, url):
+        try:
+            clr = wires[0].get("clearance_m", 0.0) if wires else 0.0
+            carb.log_info(f"[piperouter] Route All (bundles): {len(wires)} wire(s), "
+                          f"{len(bundles)} bundle(s), resolution {resolution}")
+            s = self._ensure_session(url)
+            self._voxelize(resolution, url, clearance_m=clr)
+            results, bom = s.route_all_with_bundles(
+                self._get_stage(), self._sid, wires, bundles)
+            routed = sum(1 for r in results if r["status"] == "routed")
+            carb.log_info(f"[piperouter] Route All (bundles) done: "
+                          f"{routed}/{len(results)} routed")
+            return results, bom, None
+        except Exception as exc:
+            carb.log_error(f"[piperouter] route_all_bundles failed: {exc}")
+            return None, None, str(exc)
+
     def refine(self, wire, locked_wires, resolution, url):
         try:
             s = self._ensure_session(url)

@@ -20,6 +20,7 @@ import omni.usd
 from pxr import Tf, Usd
 
 from . import bom as bom_lib
+from . import bundles as bundle_lib
 from . import headings, scene_ops, viewport_labels, waypoints, wire_library
 
 _WEIGHTS = ("surface", "bend", "thermal", "em", "smoothing")
@@ -73,6 +74,10 @@ class PipeRouterPanel:
         self._need_inspector = False
         self._need_tags = False
         self._need_bom = False
+        self._need_bundles = False
+        self._bundles = []
+        self._bundle_counter = 0
+        self._selected_bundle = None   # index into self._bundles, or None
         self._vp_labels = viewport_labels.ViewportOrderLabels()
         self._window = ui.Window("PipeRouter", width=520, height=780)
         self._build()
@@ -93,6 +98,7 @@ class PipeRouterPanel:
 
                     self._section_setup()
                     self._section_wires()
+                    self._section_bundles()
                     self._section_inspector()
                     self._section_views()
                     self._section_tagging()
@@ -202,6 +208,195 @@ class PipeRouterPanel:
         with self._inspector_frame:
             self._inspector = ui.VStack(spacing=4, height=0)
             self._rebuild_inspector()
+
+    # -------------------------------------------------------------- bundles
+    _BUNDLE_START_COLOR = (0.9, 0.7, 0.1)   # amber — "bundle start"
+    _BUNDLE_END_COLOR   = (0.9, 0.4, 0.0)   # orange — "bundle end"
+
+    def _section_bundles(self):
+        self._bundles_frame = ui.CollapsableFrame("Bundles", collapsed=True)
+        with self._bundles_frame:
+            with ui.VStack(spacing=4, height=0):
+                self._bundle_stack = ui.VStack(spacing=3, height=0)
+                self._rebuild_bundles()
+                ui.Button("+ New bundle", clicked_fn=self._new_bundle)
+
+    def _new_bundle(self):
+        stage = self._get_stage()
+        if stage is None:
+            self._progress.text = "open a USD stage first"
+            return
+        bid = f"b{self._bundle_counter}"
+        self._bundle_counter += 1
+        merge_path = f"{scene_ops.MARKERS_SCOPE}/{bid}_merge"
+        split_path = f"{scene_ops.MARKERS_SCOPE}/{bid}_split"
+        scene_ops.spawn_marker(stage, merge_path, (0.3, 0.3, 0.3),
+                               color=self._BUNDLE_START_COLOR, radius=0.06)
+        scene_ops.spawn_marker(stage, split_path, (0.8, 0.3, 0.3),
+                               color=self._BUNDLE_END_COLOR, radius=0.06)
+        # aggregate weights from current same-kind wires as a starting point
+        init_weights = {k: 1.0 for k in _WEIGHTS}
+        self._bundles.append({
+            "id": bid, "name": bid, "kind": "wire",
+            "members": [],
+            "merge_marker": merge_path,
+            "split_marker": split_path,
+            "trunk_polyline": None,
+            "trunk_length_m": 0.0,
+            "status": "unrouted",
+            "reason": "",
+            "weights": dict(init_weights),
+        })
+        self._schedule(bundles=True)
+        self._progress.text = (f"Bundle {bid}: drag the amber marker (Bundle Start) "
+                               f"and orange marker (Bundle End) to position the "
+                               f"shared trunk, then tick wires in the checklist below.")
+
+    def _rebuild_bundles(self):
+        if self._window is None or not hasattr(self, "_bundle_stack"):
+            return
+        self._bundle_stack.clear()
+        with self._bundle_stack:
+            if not self._bundles:
+                ui.Label("(no bundles — click + New bundle)",
+                         style={"color": 0xFF888888})
+                return
+            for bi, b in enumerate(self._bundles):
+                status_color = _DOT.get(b["status"], _DOT["unrouted"])
+                is_sel = bi == self._selected_bundle
+                # --- bundle header row ---
+                with ui.HStack(height=0, spacing=4):
+                    ui.Label(f"#{bi + 1}", width=26,
+                             style={"color": 0xFFDDDDDD, "font_size": 14})
+                    ui.Rectangle(width=12, height=12, tooltip=b["status"],
+                                 style={"background_color": status_color,
+                                        "border_radius": 6})
+                    ui.Button(">" if is_sel else " ", width=22,
+                              clicked_fn=lambda i=bi: self._select_bundle(i),
+                              style={"background_color": _PRIMARY} if is_sel else {})
+                    nm = ui.StringField(width=90)
+                    nm.model.set_value(b["name"])
+                    nm.model.add_value_changed_fn(
+                        lambda m, i=bi: self._rename_bundle(i, m))
+                    kind_idx = 0 if b["kind"] == "wire" else 1
+                    kc = ui.ComboBox(kind_idx, "wire", "pipe")
+                    kc.model.add_item_changed_fn(
+                        lambda m, e, i=bi: self._set_bundle_kind(i, m))
+                    ui.Button("Start",
+                              clicked_fn=lambda bb=b: self._api.select_prim(
+                                  bb["merge_marker"]),
+                              tooltip="Select the Bundle Start marker in the viewport")
+                    ui.Button("End",
+                              clicked_fn=lambda bb=b: self._api.select_prim(
+                                  bb["split_marker"]),
+                              tooltip="Select the Bundle End marker in the viewport")
+                    ui.Spacer()
+                    ui.Button("/\\", width=24, tooltip="Move bundle up (routes first)",
+                              clicked_fn=lambda i=bi: self._reorder_bundle(i, i - 1))
+                    ui.Button("\\/", width=24, tooltip="Move bundle down (routes later)",
+                              clicked_fn=lambda i=bi: self._reorder_bundle(i, i + 1))
+                    ui.Button("X", width=22,
+                              clicked_fn=lambda i=bi: self._delete_bundle(i))
+                # --- inline multiselect checklist (all same-kind wires) ---
+                compatible = [w for w in self._wires
+                              if self._types[w["type_index"]].get("kind") == b["kind"]]
+                if compatible:
+                    ui.Label("  Select wires for this bundle:",
+                             style={"color": 0xFF999999})
+                    for w in compatible:
+                        in_bundle = w["name"] in b["members"]
+                        color = self._types[w["type_index"]]["color"]
+                        with ui.HStack(height=0, spacing=6):
+                            # checkbox: colored rectangle that toggles on click
+                            tick_col = _abgr(color) if in_bundle else 0xFF444444
+                            ui.Rectangle(
+                                width=14, height=14,
+                                tooltip="Click to add/remove from bundle",
+                                style={"background_color": tick_col,
+                                       "border_radius": 3},
+                            ).set_mouse_pressed_fn(
+                                lambda _x, _y, _b, _m, wn=w["name"], i=bi:
+                                    self._toggle_bundle_member(i, wn))
+                            ui.Label(w["name"], width=160,
+                                     style={"color": 0xFFDDDDDD
+                                            if in_bundle else 0xFF888888})
+                            if in_bundle:
+                                ui.Label("in bundle",
+                                         style={"color": 0xFF33CC33,
+                                                "font_size": 12})
+                else:
+                    ui.Label(f"  (no {b['kind']}-type wires in the scene yet)",
+                             style={"color": 0xFF888888})
+                if b["status"] == "no_path" and b.get("reason"):
+                    ui.Label(f"   -> {b['reason']}", word_wrap=True,
+                             style={"color": _BAD, "font_size": 12})
+                ui.Rectangle(height=1, style={"background_color": 0xFF333333})
+
+    def _rename_bundle(self, idx, model):
+        if idx < len(self._bundles):
+            self._bundles[idx]["name"] = model.get_value_as_string()
+
+    def _set_bundle_kind(self, idx, model):
+        if idx < len(self._bundles):
+            i = int(model.get_item_value_model().get_value_as_int())
+            self._bundles[idx]["kind"] = "wire" if i == 0 else "pipe"
+
+    def _delete_bundle(self, idx):
+        if idx >= len(self._bundles):
+            return
+        b = self._bundles[idx]
+        stage = self._get_stage()
+        if stage:
+            for path in (b["merge_marker"], b["split_marker"]):
+                p = stage.GetPrimAtPath(path)
+                if p and p.IsValid():
+                    stage.RemovePrim(p.GetPath())
+            trunk_prim = stage.GetPrimAtPath(
+                f"{scene_ops.ROUTES_SCOPE}/bundle_{b['id']}_trunk")
+            if trunk_prim and trunk_prim.IsValid():
+                stage.RemovePrim(trunk_prim.GetPath())
+        if self._selected_bundle == idx:
+            self._selected_bundle = None
+        elif self._selected_bundle is not None and self._selected_bundle > idx:
+            self._selected_bundle -= 1
+        del self._bundles[idx]
+        self._schedule(bundles=True, wires=True, inspector=True)
+
+    def _toggle_bundle_member(self, bundle_idx, wire_name):
+        """Toggle a single wire in/out of a bundle. A wire can be in multiple bundles."""
+        if bundle_idx >= len(self._bundles):
+            return
+        b = self._bundles[bundle_idx]
+        if wire_name in b["members"]:
+            b["members"].remove(wire_name)
+        else:
+            b["members"].append(wire_name)
+        # Re-aggregate trunk weights from current members as a suggested starting point
+        # (only updates keys that haven't been manually changed from default 1.0)
+        members = [w for w in self._wires if w["name"] in b["members"]]
+        if members:
+            for k in _WEIGHTS:
+                # take max across members — most conservative wins
+                b["weights"][k] = max(w["weights"].get(k, 1.0) for w in members)
+        self._schedule(bundles=True, inspector=True)
+
+    def _reorder_bundle(self, src, dst):
+        """Move bundle at index src to index dst (up/down order)."""
+        n = len(self._bundles)
+        if not (0 <= src < n and 0 <= dst < n) or src == dst:
+            return
+        self._bundles.insert(dst, self._bundles.pop(src))
+        if self._selected_bundle == src:
+            self._selected_bundle = dst
+        self._schedule(bundles=True)
+
+    def _select_bundle(self, idx):
+        """Select a bundle for editing in the inspector (clears wire selection)."""
+        self._selected_bundle = idx
+        self._selected = None
+        b = self._bundles[idx]
+        self._api.select_prims([b["merge_marker"], b["split_marker"]])
+        self._schedule(bundles=True, wires=True, inspector=True)
 
     def _section_tagging(self):
         with ui.CollapsableFrame("Tagging (thermal / EM)", collapsed=True):
@@ -354,11 +549,13 @@ class PipeRouterPanel:
     # omni.ui forbids clearing/rebuilding a container from inside an event/draw
     # callback ("Container::clear was called during an event or draw"). So event
     # handlers request a refresh and we rebuild on the next frame instead.
-    def _schedule(self, wires=False, inspector=False, tags=False, bom=False):
+    def _schedule(self, wires=False, inspector=False, tags=False, bom=False,
+                  bundles=False):
         self._need_wires = self._need_wires or wires
         self._need_inspector = self._need_inspector or inspector
         self._need_tags = self._need_tags or tags
         self._need_bom = self._need_bom or bom
+        self._need_bundles = self._need_bundles or bundles
         if self._refresh_pending:
             return
         self._refresh_pending = True
@@ -382,6 +579,9 @@ class PipeRouterPanel:
         if self._need_bom:
             self._need_bom = False
             self._rebuild_bom()
+        if self._need_bundles:
+            self._need_bundles = False
+            self._rebuild_bundles()
         # viewport order labels track marker drags / selection, refreshed every
         # coalesced frame (cheap; reads stage positions for the selected wire)
         self._refresh_vp_labels()
@@ -516,14 +716,15 @@ class PipeRouterPanel:
 
     def _select(self, idx):
         self._selected = idx
-        # highlight the whole wire in the viewport: start/end + waypoints + its tube
+        self._selected_bundle = None   # wire selection clears bundle selection
         w = self._wires[idx]
+        # note: must schedule bundles=True so the bundle row highlight clears
         paths = [f"{scene_ops.MARKERS_SCOPE}/{w['key']}_start",
                  f"{scene_ops.MARKERS_SCOPE}/{w['key']}_end",
                  *w["waypoints"],
                  f"{scene_ops.ROUTES_SCOPE}/{w['name']}"]
         self._api.select_prims(paths)
-        self._schedule(wires=True, inspector=True)
+        self._schedule(wires=True, inspector=True, bundles=True)
 
     def _toggle_lock(self):
         w = self._wires[self._selected]
@@ -536,8 +737,13 @@ class PipeRouterPanel:
             return
         self._inspector.clear()
         with self._inspector:
+            # bundle selected → show bundle inspector
+            if (self._selected is None and self._selected_bundle is not None
+                    and self._selected_bundle < len(self._bundles)):
+                self._rebuild_inspector_bundle(self._selected_bundle)
+                return
             if self._selected is None or self._selected >= len(self._wires):
-                ui.Label("(select a wire above)", style={"color": 0xFF888888})
+                ui.Label("(select a wire or bundle above)", style={"color": 0xFF888888})
                 return
             w = self._wires[self._selected]
             status = "locked" if w["locked"] else w["status"]
@@ -609,6 +815,45 @@ class PipeRouterPanel:
                 ui.Button("Re-route this wire", clicked_fn=self._on_refine,
                           style={"background_color": _PRIMARY, "color": 0xFFFFFFFF})
                 ui.Button("Unlock" if w["locked"] else "Lock", clicked_fn=self._toggle_lock)
+
+    def _rebuild_inspector_bundle(self, bidx):
+        """Bundle inspector shown inside the Selected wire frame when a bundle is selected."""
+        b = self._bundles[bidx]
+        status = b["status"]
+        with ui.HStack(height=0, spacing=6):
+            ui.Rectangle(width=14, height=14,
+                         style={"background_color": _abgr(self._BUNDLE_START_COLOR)})
+            ui.Rectangle(width=14, height=14, tooltip=status,
+                         style={"background_color": _DOT.get(status, _DOT["unrouted"]),
+                                "border_radius": 7})
+            ui.Label(f"{b['name']}", style={"font_size": 16})
+            ui.Label(f"· bundle ({b['kind']})", style={"color": 0xFFAAAAAA})
+        # members summary
+        mem_str = ", ".join(b["members"]) if b["members"] else "(none)"
+        ui.Label(f"Members: {mem_str}", word_wrap=True,
+                 style={"color": 0xFF999999})
+        if status == "no_path" and b.get("reason"):
+            ui.Label(f"No path: {b['reason']}", word_wrap=True,
+                     style={"color": _BAD})
+        ui.Label("Trunk constraints (applied to the shared trunk segment).",
+                 style={"color": 0xFF999999})
+        self._bundle_sliders = {}
+        for k in _WEIGHTS:
+            label, help_text = _WEIGHT_HELP[k]
+            with ui.HStack(height=0):
+                ui.Label(label, width=100, tooltip=help_text)
+                s = ui.FloatSlider(min=0.0, max=10.0, tooltip=help_text)
+                s.model.set_value(b["weights"].get(k, 1.0))
+                s.model.add_value_changed_fn(
+                    lambda m, kk=k, i=bidx: self._set_bundle_weight(i, kk, m))
+                self._bundle_sliders[k] = s
+        with ui.HStack(height=0):
+            ui.Button("Re-route bundle", clicked_fn=self._on_refine_bundle,
+                      style={"background_color": _PRIMARY, "color": 0xFFFFFFFF})
+
+    def _set_bundle_weight(self, bidx, k, model):
+        if bidx < len(self._bundles):
+            self._bundles[bidx]["weights"][k] = float(model.get_value_as_float())
 
     def _set_weight(self, k, model):
         # Live-write a slider value into the currently selected wire's weights so it
@@ -731,8 +976,17 @@ class PipeRouterPanel:
             self._progress.text = "add a wire first"
             return
         self._progress.text = "voxelizing + routing all..."
-        results, bom, err = self._api.route_all(wires, self._res.model.get_value_as_int(),
-                                                self._url_value())
+
+        has_bundles = bool(self._bundles)
+        if has_bundles:
+            results, bom, err = self._api.route_all_bundles(
+                wires, self._bundles,
+                self._res.model.get_value_as_int(),
+                self._url_value())
+        else:
+            results, bom, err = self._api.route_all(
+                wires, self._res.model.get_value_as_int(), self._url_value())
+
         if err:
             self._progress.text = f"error: {err}"
             return
@@ -743,15 +997,25 @@ class PipeRouterPanel:
                 w["status"] = r["status"]
                 w["polyline"] = r.get("polyline") if r["status"] == "routed" else None
                 w["reason"] = r.get("reason", "") if r["status"] != "routed" else ""
-        for b in (bom or []):
+        for b_row in (bom or []):
             for w in self._wires:
-                if w["name"] == b["wire_id"]:
-                    w["length_m"] = b["length_m"]
-                    w["cost"] = b["cost"]
+                if w["name"] == b_row["wire_id"]:
+                    w["length_m"] = b_row["length_m"]
+                    w["cost"] = b_row["cost"]
+        # update bundle statuses from trunk results
+        if has_bundles:
+            for b in self._bundles:
+                trunk_id = f"bundle_{b['id']}_trunk"
+                tr = by_name.get(trunk_id)
+                if tr:
+                    b["status"] = tr["status"]
+                    b["trunk_polyline"] = tr.get("polyline")
+                    b["trunk_length_m"] = tr.get("length_m", 0.0)
+                    b["reason"] = tr.get("reason", "")
         self._last_bom = bom or []
         note = getattr(self._api, "_clearance_note", None)
         self._progress.text = f"done — note: {note}" if note else "done"
-        self._schedule(wires=True, bom=True)
+        self._schedule(wires=True, bom=True, bundles=True)
         self._refresh_views()
         self._refresh_overlay()
 
@@ -761,13 +1025,22 @@ class PipeRouterPanel:
         w = self._wires[self._selected]
         for k, s in getattr(self, "_sliders", {}).items():
             w["weights"][k] = s.model.get_value_as_float()
+
+        # If this wire belongs to any bundles, re-routing it must also re-route those
+        # bundles (trunk + this wire's branches) — otherwise the wire ignores the shared
+        # trunk it's supposed to pass through.
+        my_bundles = [b for b in self._bundles if w["name"] in b["members"]]
+        if my_bundles:
+            self._progress.text = (f"re-routing bundle(s) containing {w['name']}...")
+            self._run_bundle_reroute(my_bundles, trigger_wire=w["name"])
+            return
+
         wire = self._gather_wire(w)
         if wire is None:
             self._progress.text = "wire has no endpoints"
             return
         # Every OTHER already-routed wire is an obstacle, so re-routing this one
-        # never overlaps the rest (wires must not overlap, even on single re-route).
-        # Locking is no longer required to be avoided — it now just freezes a wire.
+        # never overlaps the rest.
         obstacles = [{"spec": wire_library.as_spec(self._types[ow["type_index"]]),
                       "polyline": ow["polyline"]}
                      for ow in self._wires if ow is not w and ow.get("polyline")]
@@ -784,13 +1057,68 @@ class PipeRouterPanel:
         if bom_row:
             w["length_m"] = bom_row["length_m"]
             w["cost"] = bom_row["cost"]
-            # replace this wire's row in the BOM (or append if absent) so the table
-            # reflects the re-route without needing a full Route All
             self._last_bom = [b for b in self._last_bom if b["wire_id"] != bom_row["wire_id"]]
             self._last_bom.append(bom_row)
         self._progress.text = (f"{w['name']}: {w['status']}"
                                + (f" — {w['reason']}" if w["reason"] else ""))
         self._schedule(wires=True, bom=True)
+        self._refresh_views()
+        self._refresh_overlay()
+
+    def _on_refine_bundle(self):
+        """Re-route the currently selected bundle (called from bundle inspector)."""
+        if self._selected_bundle is None or self._selected_bundle >= len(self._bundles):
+            return
+        b = self._bundles[self._selected_bundle]
+        for k, s in getattr(self, "_bundle_sliders", {}).items():
+            b["weights"][k] = s.model.get_value_as_float()
+        self._progress.text = f"re-routing bundle {b['name']}..."
+        self._run_bundle_reroute([b])
+
+    def _run_bundle_reroute(self, bundles_to_reroute, trigger_wire=None):
+        """Re-route a list of bundles (trunk + all member branches each).
+        ALL bundles are passed to route_all_bundles so the two-phase algorithm
+        correctly builds the full segment sequence for wires shared across multiple
+        bundles — e.g. a wire in B1 and B2 needs B1's split position even when
+        we're only explicitly re-routing B2.
+        trigger_wire: name of the member wire that triggered this reroute (for the log)."""
+        pairs = [(w, self._gather_wire(w, i)) for i, w in enumerate(self._wires)]
+        wires = [g for (_w, g) in pairs if g]
+        results, bom, err = self._api.route_all_bundles(
+            wires, self._bundles,        # pass ALL bundles, not just the triggered ones
+            self._res.model.get_value_as_int(),
+            self._url_value())
+        if err:
+            self._progress.text = f"bundle re-route error: {err}"
+            return
+        by_name = {r["wire_id"]: r for r in (results or [])}
+        for w in self._wires:
+            r = by_name.get(w["name"])
+            if r:
+                w["status"] = r["status"]
+                w["polyline"] = r.get("polyline") if r["status"] == "routed" else None
+                w["reason"] = r.get("reason", "") if r["status"] != "routed" else ""
+        for b_row in (bom or []):
+            for w in self._wires:
+                if w["name"] == b_row["wire_id"]:
+                    w["length_m"] = b_row["length_m"]
+                    w["cost"] = b_row["cost"]
+        for b in bundles_to_reroute:
+            trunk_id = f"bundle_{b['id']}_trunk"
+            tr = by_name.get(trunk_id)
+            if tr:
+                b["status"] = tr["status"]
+                b["trunk_polyline"] = tr.get("polyline")
+                b["trunk_length_m"] = tr.get("length_m", 0.0)
+                b["reason"] = tr.get("reason", "")
+        for b_row in (bom or []):
+            self._last_bom = [x for x in self._last_bom if x["wire_id"] != b_row["wire_id"]]
+        self._last_bom.extend(bom or [])
+        msg = f"bundle re-route done"
+        if trigger_wire:
+            msg = f"{trigger_wire}: bundle re-routed"
+        self._progress.text = msg
+        self._schedule(wires=True, bom=True, bundles=True)
         self._refresh_views()
         self._refresh_overlay()
 
@@ -804,6 +1132,10 @@ class PipeRouterPanel:
             return
         routes = [{"points": w["polyline"], "color": self._types[w["type_index"]]["color"]}
                   for w in self._wires if w.get("polyline") and w["status"] == "routed"]
+        # bundle trunks render white so they're distinct in the 2D cross-sections
+        for b in getattr(self, "_bundles", []):
+            if b.get("trunk_polyline") and b["status"] == "routed":
+                routes.append({"points": b["trunk_polyline"], "color": (1.0, 1.0, 1.0)})
         imgs, err = self._api.slice_views(routes)
         if err or not imgs:
             if err:

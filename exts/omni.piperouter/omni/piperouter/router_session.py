@@ -15,6 +15,7 @@ from pathlib import Path
 
 import numpy as np
 
+from . import bundles as bundle_lib
 from . import fields, grid_io, scene_ops, voxelizer
 from .solver_client import SolverClient
 
@@ -206,3 +207,222 @@ class RouterSession:
                        "length_m": 0.0, "cost": 0.0, "mass": 0.0,
                        "reason": res.get("reason", "")}
         return res, bom_row
+
+    def route_all_with_bundles(self, stage, session_id, wires, bundles):
+        """Bundle-aware Route All.
+
+        Two-phase algorithm supporting wires that are in MULTIPLE bundles:
+
+        Phase 1 — route ALL trunks in bundle order. Each trunk's cells become
+        obstacles for subsequent bundles so they don't collide.
+
+        Phase 2 — for each member wire, determine its complete segment sequence
+        across ALL bundles it belongs to (in order), then route every individual
+        (non-trunk) segment. Example for a wire in B1 then B2:
+            wire_start -> B1_merge  [individual]
+            B1_merge   -> B1_split  [trunk B1, already routed]
+            B1_split   -> B2_merge  [individual — between-bundle segment]
+            B2_merge   -> B2_split  [trunk B2, already routed]
+            B2_split   -> wire_end  [individual]
+        Then stitch all segments + trunks into one continuous polyline and author
+        one per-wire colored tube (trunks are visually covered by their thick tubes).
+        Returns (results, bom).
+        """
+        member_names = {name for b in bundles for name in b["members"]}
+        wire_by_name = {w["name"]: w for w in wires}
+
+        # --- Phase 0: route non-bundle wires first ---
+        non_bundle = [w for w in wires if w["name"] not in member_names]
+        if non_bundle:
+            nb_results, nb_bom = self.route_all(stage, session_id, non_bundle)
+        else:
+            scene_ops.clear_routes(stage)
+            nb_results, nb_bom = [], []
+
+        all_results = list(nb_results)
+        all_bom = list(nb_bom)
+
+        # --- Phase 1: route every trunk in bundle order ---
+        trunk_data = {}   # bid -> {poly, len, ts, member_specs, conn}
+        failed_bundles = set()
+
+        for b in bundles:
+            bid = b["id"]
+            member_wires = [wire_by_name[n] for n in b["members"]
+                            if n in wire_by_name]
+            if not member_wires:
+                continue
+            member_specs = [w["spec"] for w in member_wires]
+
+            type_map = {w["name"]: w["spec"] for w in member_wires}
+            ok, err = bundle_lib.validate_members(member_wires, type_map)
+            if not ok:
+                for w in member_wires:
+                    reason = f"Bundle validation failed: {err}"
+                    all_results.append({"wire_id": w["name"], "status": "no_path",
+                                        "reason": reason, "polyline": [],
+                                        "length_m": 0.0})
+                    all_bom.append({"wire_id": w["name"], "status": "no_path",
+                                    "length_m": 0.0, "cost": 0.0, "mass": 0.0,
+                                    "reason": reason})
+                failed_bundles.add(bid)
+                continue
+
+            merge_pos = scene_ops.get_world_pos(stage, b["merge_marker"])
+            split_pos = scene_ops.get_world_pos(stage, b["split_marker"])
+            if merge_pos is None or split_pos is None:
+                reason = "Bundle merge/split markers not found in stage."
+                for w in member_wires:
+                    all_results.append({"wire_id": w["name"], "status": "no_path",
+                                        "reason": reason, "polyline": [],
+                                        "length_m": 0.0})
+                    all_bom.append({"wire_id": w["name"], "status": "no_path",
+                                    "length_m": 0.0, "cost": 0.0, "mass": 0.0,
+                                    "reason": reason})
+                failed_bundles.add(bid)
+                continue
+
+            ts = bundle_lib.trunk_spec(member_specs, bid)
+            conn = member_wires[0].get("connectivity", 18)
+            trunk_weights = dict(b.get("weights", {}))
+            trunk_route = {
+                "wire": ts,
+                "start": [float(x) for x in merge_pos],
+                "end": [float(x) for x in split_pos],
+                "waypoints": [], "weights": trunk_weights,
+                "connectivity": conn, "priority": 0, "clearance_m": 0.0,
+            }
+            trunk_res = self.client.solve(session_id, trunk_route)
+            if trunk_res["status"] != "routed":
+                reason = ("Bundle trunk failed: "
+                          + trunk_res.get("reason", "could not be routed."))
+                for w in member_wires:
+                    all_results.append({"wire_id": w["name"], "status": "no_path",
+                                        "reason": reason, "polyline": [],
+                                        "length_m": 0.0})
+                    all_bom.append({"wire_id": w["name"], "status": "no_path",
+                                    "length_m": 0.0, "cost": 0.0, "mass": 0.0,
+                                    "reason": reason})
+                failed_bundles.add(bid)
+                continue
+
+            trunk_poly = trunk_res["polyline"]
+            trunk_len = float(trunk_res["length_m"])
+            trunk_od_m = max(float(ts["outer_diameter_mm"]) / 1000.0,
+                             MIN_DISPLAY_DIAMETER_M)
+            scene_ops.author_tube(
+                stage, f"{scene_ops.ROUTES_SCOPE}/bundle_{bid}_trunk",
+                trunk_poly, trunk_od_m, tuple(ts["color"]))
+
+            combined_cost_pm = sum(float(s.get("cost_per_m", 0.0))
+                                   for s in member_specs)
+            trunk_id = f"bundle_{bid}_trunk"
+            all_bom.append({"wire_id": trunk_id, "status": "routed",
+                            "length_m": trunk_len,
+                            "cost": combined_cost_pm * trunk_len,
+                            "mass": float(ts["mass_per_m_kg"]) * trunk_len,
+                            "reason": ""})
+            all_results.append({"wire_id": trunk_id, "status": "routed",
+                                 "polyline": trunk_poly, "length_m": trunk_len})
+            trunk_data[bid] = {
+                "poly": trunk_poly, "len": trunk_len, "ts": ts,
+                "merge_pos": merge_pos, "split_pos": split_pos,
+                "member_specs": member_specs, "conn": conn,
+            }
+
+        # --- Phase 2: for each member wire, route all individual segments ---
+        # Collect each unique member wire and the ordered bundles it belongs to.
+        wire_bundles: dict[str, list] = {}
+        for b in bundles:
+            if b["id"] in failed_bundles:
+                continue
+            for name in b["members"]:
+                if name not in wire_by_name or b["id"] not in trunk_data:
+                    continue
+                wire_bundles.setdefault(name, []).append(b)
+
+        already_added = set()   # wire names already in all_results
+
+        for wire_name, wire_bundle_list in wire_bundles.items():
+            w = wire_by_name[wire_name]
+            spec = dict(w["spec"])
+            weights = dict(w.get("weights", {}))
+            wconn = w.get("connectivity", 18)
+            od_m = max(float(spec["outer_diameter_mm"]) / 1000.0,
+                       MIN_DISPLAY_DIAMETER_M)
+            color = spec.get("color", (0.8, 0.1, 0.1))
+
+            # Build the ordered list of (from_pos, to_pos, is_trunk, bundle_id)
+            # for this wire across all its bundles.
+            segments = []          # (from, to, is_trunk, bid)
+            prev_split = None
+            for b in wire_bundle_list:
+                td = trunk_data[b["id"]]
+                seg_start = prev_split if prev_split is not None else w["start"]
+                segments.append((seg_start, td["merge_pos"], False, b["id"]))
+                segments.append((td["merge_pos"], td["split_pos"], True, b["id"]))
+                prev_split = td["split_pos"]
+            # Final segment: last split -> wire end
+            last_start = prev_split if prev_split is not None else w["start"]
+            segments.append((last_start, w["end"], False, None))
+
+            # Route each non-trunk segment, collect results.
+            full_poly = []
+            branch_len = 0.0
+            failed = False
+
+            for seg_idx, (seg_from, seg_to, is_trunk, bid) in enumerate(segments):
+                if is_trunk:
+                    td = trunk_data[bid]
+                    # Stitch the shared trunk into the full polyline
+                    full_poly = bundle_lib.stitch_polylines(
+                        full_poly, td["poly"], []) if full_poly else list(td["poly"])
+                else:
+                    seg_route = {
+                        "wire": spec,
+                        "start": [float(x) for x in seg_from],
+                        "end": [float(x) for x in seg_to],
+                        "waypoints": [], "weights": weights,
+                        "connectivity": wconn, "priority": 0, "clearance_m": 0.0,
+                    }
+                    seg_res = self.client.solve(session_id, seg_route)
+                    if seg_res["status"] != "routed":
+                        reason = seg_res.get("reason", "Branch segment could not be routed.")
+                        all_results.append({"wire_id": wire_name, "status": "no_path",
+                                            "reason": reason, "polyline": [],
+                                            "length_m": 0.0})
+                        all_bom.append({"wire_id": wire_name, "status": "no_path",
+                                        "length_m": 0.0, "cost": 0.0, "mass": 0.0,
+                                        "reason": reason})
+                        failed = True
+                        break
+                    poly = seg_res["polyline"]
+                    branch_len += float(seg_res["length_m"])
+                    full_poly = (bundle_lib.stitch_polylines(full_poly, poly, [])
+                                 if full_poly else list(poly))
+                    # Author individual segment tube (colored; overlapping trunk
+                    # sections are visually hidden under the thicker trunk tube)
+                    if len(poly) >= 2:
+                        scene_ops.author_tube(
+                            stage,
+                            f"{scene_ops.ROUTES_SCOPE}/{wire_name}_seg{seg_idx}",
+                            poly, od_m, color)
+
+            if not failed and wire_name not in already_added:
+                total_trunk_len = sum(trunk_data[b["id"]]["len"]
+                                      for b in wire_bundle_list)
+                all_results.append({
+                    "wire_id": wire_name, "status": "routed",
+                    "polyline": full_poly,
+                    "length_m": branch_len + total_trunk_len,
+                })
+                all_bom.append({
+                    "wire_id": wire_name, "status": "routed",
+                    "length_m": branch_len,   # BOM: branch-only length
+                    "cost": branch_len * float(spec.get("cost_per_m", 0.0)),
+                    "mass": branch_len * float(spec.get("mass_per_m_kg", 0.0)),
+                    "reason": "",
+                })
+                already_added.add(wire_name)
+
+        return all_results, all_bom
