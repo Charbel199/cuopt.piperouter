@@ -21,7 +21,7 @@ from pxr import Tf, Usd
 
 from . import bom as bom_lib
 from . import bundles as bundle_lib
-from . import headings, scene_ops, viewport_labels, waypoints, wire_library
+from . import headings, hud as hud_mod, scene_ops, viewport_labels, waypoints, wire_library
 
 _WEIGHTS = ("surface", "bend", "thermal", "em", "smoothing")
 
@@ -86,6 +86,8 @@ class PipeRouterPanel:
         self._selected_bundle = None   # index into self._bundles, or None
         self._checklist_collapsed = {}  # bid -> bool: user-controlled collapsed state
         self._vp_labels = viewport_labels.ViewportOrderLabels()
+        self._hud = hud_mod.ViewportHUD()
+        self._hud_visible = True
         self._window = ui.Window("PipeRouter", width=520, height=780)
         self._build()
 
@@ -101,6 +103,9 @@ class PipeRouterPanel:
                             width=12, height=12,
                             style={"background_color": 0xFF888888, "border_radius": 6})
                         self._status = ui.Label("checking...")
+                        ui.Spacer()
+                        ui.Button("HUD", width=40, tooltip="Toggle viewport stats overlay",
+                                  clicked_fn=self._toggle_hud)
                     self._progress = ui.Label("", style={"color": 0xFFBBBBBB})
 
                     self._section_setup()
@@ -559,6 +564,30 @@ class PipeRouterPanel:
         return {w["name"]: self._type_labels[w["type_index"]] for w in self._wires}
 
     # ----------------------------------------------------------- connection
+    def _toggle_hud(self):
+        self._hud_visible = not self._hud_visible
+        self._hud.set_visible(self._hud_visible)
+        if self._hud_visible:
+            self._refresh_hud()
+
+    def _refresh_hud(self):
+        """Push current BOM totals + selected-wire weights to the viewport HUD."""
+        if not self._hud_visible:
+            return
+        s = bom_lib.summarize(self._last_bom, self._bom_type_labels())
+        stats = {
+            "total_cost":   s["total_cost"],
+            "total_mass":   s["total_mass"],
+            "total_length": s["total_length"],
+            "n_routed":     s["n_routed"],
+            "n_total":      len(self._wires),
+            "n_no_path":    s["n_no_path"],
+        }
+        wire = (self._wires[self._selected]
+                if self._selected is not None and self._selected < len(self._wires)
+                else None)
+        self._hud.update(stats, wire)
+
     def _check_connection(self):
         url = self._url_value()
         info, err = self._api.health(url)
@@ -625,9 +654,9 @@ class PipeRouterPanel:
         if self._need_bundles:
             self._need_bundles = False
             self._rebuild_bundles()
-        # viewport order labels track marker drags / selection, refreshed every
-        # coalesced frame (cheap; reads stage positions for the selected wire)
+        # viewport order labels + HUD refreshed every coalesced frame
         self._refresh_vp_labels()
+        self._refresh_hud()
 
     # ----------------------------------------------------------------- wires
     def _new_wire(self, key, name, type_index=0):
@@ -774,6 +803,7 @@ class PipeRouterPanel:
                  *w["waypoints"],
                  f"{scene_ops.ROUTES_SCOPE}/{w['name']}"]
         self._api.select_prims(paths)
+        self._refresh_hud()
         self._schedule(wires=True, inspector=True, bundles=True)
 
     def _toggle_lock(self):
@@ -1109,6 +1139,7 @@ class PipeRouterPanel:
         self._schedule(wires=True, bom=True, bundles=True)
         self._refresh_views()
         self._refresh_overlay()
+        self._refresh_hud()
 
     def _on_refine(self):
         if self._selected is None:
@@ -1157,6 +1188,7 @@ class PipeRouterPanel:
         self._schedule(wires=True, bom=True)
         self._refresh_views()
         self._refresh_overlay()
+        self._refresh_hud()
 
     def _on_refine_bundle(self):
         """Re-route the currently selected bundle (called from bundle inspector)."""
@@ -1214,6 +1246,7 @@ class PipeRouterPanel:
         self._schedule(wires=True, bom=True, bundles=True)
         self._refresh_views()
         self._refresh_overlay()
+        self._refresh_hud()
 
     # ------------------------------------------------------ tag / overlay / io
     def _refresh_views(self, force=False):
@@ -1302,6 +1335,9 @@ class PipeRouterPanel:
         if getattr(self, "_vp_labels", None) is not None:
             self._vp_labels.destroy()
             self._vp_labels = None
+        if getattr(self, "_hud", None) is not None:
+            self._hud.destroy()
+            self._hud = None
         if self._window:
             self._window.destroy()
             self._window = None
