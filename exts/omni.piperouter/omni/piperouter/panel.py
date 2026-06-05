@@ -84,6 +84,7 @@ class PipeRouterPanel:
         self._bundles = []
         self._bundle_counter = 0
         self._selected_bundle = None   # index into self._bundles, or None
+        self._checklist_collapsed = {}  # bid -> bool: user-controlled collapsed state
         self._vp_labels = viewport_labels.ViewportOrderLabels()
         self._window = ui.Window("PipeRouter", width=520, height=780)
         self._build()
@@ -321,7 +322,12 @@ class PipeRouterPanel:
                 mem_count = len(b["members"])
                 checklist_label = (f"Wires ({mem_count} selected)"
                                    if mem_count else "Wires (none selected)")
-                with ui.CollapsableFrame(checklist_label, collapsed=mem_count > 0):
+                # use the user's last-set collapsed state; default open when no members
+                default_collapsed = self._checklist_collapsed.get(b["id"], mem_count > 0)
+                cf = ui.CollapsableFrame(checklist_label, collapsed=default_collapsed)
+                cf.set_collapsed_changed_fn(
+                    lambda v, bid=b["id"]: self._checklist_collapsed.__setitem__(bid, v))
+                with cf:
                     with ui.VStack(spacing=2, height=0):
                         compatible = [w for w in self._wires
                                       if self._types[w["type_index"]].get("kind") == "wire"]
@@ -402,6 +408,10 @@ class PipeRouterPanel:
         if bundle_idx >= len(self._bundles):
             return
         b = self._bundles[bundle_idx]
+        # The user is interacting with the checklist — mark it as open so the
+        # rebuild doesn't collapse it (first-click fix: before any toggle the state
+        # dict has no entry and defaults to collapsed when mem_count goes 0->1).
+        self._checklist_collapsed[b["id"]] = False
         if wire_name in b["members"]:
             b["members"].remove(wire_name)
         else:
@@ -410,7 +420,6 @@ class PipeRouterPanel:
         members = [w for w in self._wires if w["name"] in b["members"]]
         if members:
             for k in _WEIGHTS:
-                # take max across members — most conservative wins
                 b["weights"][k] = max(w["weights"].get(k, 1.0) for w in members)
         self._schedule(bundles=True, inspector=True)
 
