@@ -77,6 +77,45 @@
       "max_temp_c": 160,
       "em_sensitivity": 0.0,
       "color": [0.7, 0.7, 0.2]
+    },
+    {
+      "id": "harness_s",
+      "label": "Harness S (2-3 wires)",
+      "kind": "bundle",
+      "outer_diameter_mm": 0.0,
+      "inner_diameter_mm": 0.0,
+      "min_bend_radius_mm": 40.0,
+      "cost_per_m": 1.20,
+      "mass_per_m_kg": 0.05,
+      "max_temp_c": 105,
+      "em_sensitivity": 0.0,
+      "color": [0.75, 0.75, 0.75]
+    },
+    {
+      "id": "harness_m",
+      "label": "Harness M (4-6 wires)",
+      "kind": "bundle",
+      "outer_diameter_mm": 0.0,
+      "inner_diameter_mm": 0.0,
+      "min_bend_radius_mm": 50.0,
+      "cost_per_m": 2.00,
+      "mass_per_m_kg": 0.09,
+      "max_temp_c": 105,
+      "em_sensitivity": 0.0,
+      "color": [0.75, 0.75, 0.75]
+    },
+    {
+      "id": "harness_l",
+      "label": "Harness L (7+ wires)",
+      "kind": "bundle",
+      "outer_diameter_mm": 0.0,
+      "inner_diameter_mm": 0.0,
+      "min_bend_radius_mm": 65.0,
+      "cost_per_m": 3.20,
+      "mass_per_m_kg": 0.18,
+      "max_temp_c": 105,
+      "em_sensitivity": 0.0,
+      "color": [0.75, 0.75, 0.75]
     }
   ]
 }

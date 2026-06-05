@@ -314,8 +314,12 @@ class RouterSession:
                 stage, f"{scene_ops.ROUTES_SCOPE}/bundle_{bid}_trunk",
                 trunk_poly, trunk_od_m, tuple(ts["color"]))
 
-            combined_cost_pm = sum(float(s.get("cost_per_m", 0.0))
-                                   for s in member_specs)
+            # Use the bundle's harness type cost_per_m when the panel has set it;
+            # fall back to summing individual member wire costs.
+            bundle_type_cost_pm = float(b.get("bundle_type_cost_pm", 0.0))
+            combined_cost_pm = (bundle_type_cost_pm if bundle_type_cost_pm > 0
+                                else sum(float(s.get("cost_per_m", 0.0))
+                                         for s in member_specs))
             trunk_id = f"bundle_{bid}_trunk"
             all_bom.append({"wire_id": trunk_id, "status": "routed",
                             "length_m": trunk_len,

@@ -61,9 +61,15 @@ class PipeRouterPanel:
         self._get_stage = get_stage
         self._api = api
         self._default_url = default_url
-        self._types = wire_library.load_wire_library()
+        all_types = wire_library.load_wire_library()
+        # wire types (used in the Wires section — kind=="wire" only; pipes not bundled)
+        self._types = [t for t in all_types if t["kind"] in ("wire", "pipe")]
         self._type_labels = [t["label"] for t in self._types]
         self._type_ids = [t["id"] for t in self._types]
+        # bundle harness types (kind=="bundle") — cost/label for trunk BOM rows
+        self._bundle_types = [t for t in all_types if t["kind"] == "bundle"]
+        self._bundle_type_labels = [t["label"] for t in self._bundle_types]
+        self._bundle_type_ids = [t["id"] for t in self._bundle_types]
         self._wires = []
         self._selected = None
         self._key_counter = 0
@@ -234,10 +240,11 @@ class PipeRouterPanel:
                                color=self._BUNDLE_START_COLOR, radius=0.06)
         scene_ops.spawn_marker(stage, split_path, (0.8, 0.3, 0.3),
                                color=self._BUNDLE_END_COLOR, radius=0.06)
-        # aggregate weights from current same-kind wires as a starting point
-        init_weights = {k: 1.0 for k in _WEIGHTS}
+        default_type_id = self._bundle_type_ids[0] if self._bundle_type_ids else ""
         self._bundles.append({
             "id": bid, "name": bid, "kind": "wire",
+            "type_id": default_type_id,
+            "type_index": 0,
             "members": [],
             "merge_marker": merge_path,
             "split_marker": split_path,
@@ -245,7 +252,7 @@ class PipeRouterPanel:
             "trunk_length_m": 0.0,
             "status": "unrouted",
             "reason": "",
-            "weights": dict(init_weights),
+            "weights": {k: 1.0 for k in _WEIGHTS},
         })
         self._schedule(bundles=True)
         self._progress.text = (f"Bundle {bid}: drag the amber marker (Bundle Start) "
@@ -264,69 +271,84 @@ class PipeRouterPanel:
             for bi, b in enumerate(self._bundles):
                 status_color = _DOT.get(b["status"], _DOT["unrouted"])
                 is_sel = bi == self._selected_bundle
-                # --- bundle header row ---
+                # --- bundle header row (unified style matching wire rows) ---
                 with ui.HStack(height=0, spacing=4):
-                    ui.Label(f"#{bi + 1}", width=26,
-                             style={"color": 0xFFDDDDDD, "font_size": 14})
-                    ui.Rectangle(width=12, height=12, tooltip=b["status"],
-                                 style={"background_color": status_color,
-                                        "border_radius": 6})
-                    ui.Button(">" if is_sel else " ", width=22,
+                    ui.Button(">" if is_sel else " ", width=26,
                               clicked_fn=lambda i=bi: self._select_bundle(i),
                               style={"background_color": _PRIMARY} if is_sel else {})
+                    # gray swatch (fixed bundle color)
+                    ui.Rectangle(width=12, height=12,
+                                 style={"background_color": 0xFFBBBBBB})
+                    chip_tip = b["status"]
+                    if b["status"] == "no_path" and b.get("reason"):
+                        chip_tip = f"no path: {b['reason']}"
+                    ui.Rectangle(width=12, height=12, tooltip=chip_tip,
+                                 style={"background_color": status_color,
+                                        "border_radius": 6})
                     nm = ui.StringField(width=90)
                     nm.model.set_value(b["name"])
                     nm.model.add_value_changed_fn(
                         lambda m, i=bi: self._rename_bundle(i, m))
-                    kind_idx = 0 if b["kind"] == "wire" else 1
-                    kc = ui.ComboBox(kind_idx, "wire", "pipe")
-                    kc.model.add_item_changed_fn(
-                        lambda m, e, i=bi: self._set_bundle_kind(i, m))
-                    ui.Button("Start",
+                    # bundle harness type (cost/label for trunk BOM)
+                    if self._bundle_type_labels:
+                        tidx = b.get("type_index", 0)
+                        btc = ui.ComboBox(tidx, *self._bundle_type_labels)
+                        btc.model.add_item_changed_fn(
+                            lambda m, e, i=bi: self._set_bundle_type(i, m))
+                    # trunk length + cost when routed
+                    tl = b.get("trunk_length_m", 0.0)
+                    if b["status"] == "routed" and tl:
+                        bt = (self._bundle_types[b.get("type_index", 0)]
+                              if self._bundle_types else None)
+                        cost = tl * float(bt["cost_per_m"]) if bt else 0.0
+                        fig = f"{tl:.1f}m ${cost:.0f}"
+                    else:
+                        fig = ""
+                    ui.Label(fig, width=72, style={"color": 0xFFAAAAAA})
+                    ui.Button("S", width=22, tooltip="Locate Bundle Start marker",
                               clicked_fn=lambda bb=b: self._api.select_prim(
-                                  bb["merge_marker"]),
-                              tooltip="Select the Bundle Start marker in the viewport")
-                    ui.Button("End",
+                                  bb["merge_marker"]))
+                    ui.Button("E", width=22, tooltip="Locate Bundle End marker",
                               clicked_fn=lambda bb=b: self._api.select_prim(
-                                  bb["split_marker"]),
-                              tooltip="Select the Bundle End marker in the viewport")
-                    ui.Spacer()
+                                  bb["split_marker"]))
                     ui.Button("/\\", width=24, tooltip="Move bundle up (routes first)",
                               clicked_fn=lambda i=bi: self._reorder_bundle(i, i - 1))
                     ui.Button("\\/", width=24, tooltip="Move bundle down (routes later)",
                               clicked_fn=lambda i=bi: self._reorder_bundle(i, i + 1))
                     ui.Button("X", width=22,
                               clicked_fn=lambda i=bi: self._delete_bundle(i))
-                # --- inline multiselect checklist (all same-kind wires) ---
-                compatible = [w for w in self._wires
-                              if self._types[w["type_index"]].get("kind") == b["kind"]]
-                if compatible:
-                    ui.Label("  Select wires for this bundle:",
-                             style={"color": 0xFF999999})
-                    for w in compatible:
-                        in_bundle = w["name"] in b["members"]
-                        color = self._types[w["type_index"]]["color"]
-                        with ui.HStack(height=0, spacing=6):
-                            # checkbox: colored rectangle that toggles on click
-                            tick_col = _abgr(color) if in_bundle else 0xFF444444
-                            ui.Rectangle(
-                                width=14, height=14,
-                                tooltip="Click to add/remove from bundle",
-                                style={"background_color": tick_col,
-                                       "border_radius": 3},
-                            ).set_mouse_pressed_fn(
-                                lambda _x, _y, _b, _m, wn=w["name"], i=bi:
-                                    self._toggle_bundle_member(i, wn))
-                            ui.Label(w["name"], width=160,
-                                     style={"color": 0xFFDDDDDD
-                                            if in_bundle else 0xFF888888})
-                            if in_bundle:
-                                ui.Label("in bundle",
-                                         style={"color": 0xFF33CC33,
-                                                "font_size": 12})
-                else:
-                    ui.Label(f"  (no {b['kind']}-type wires in the scene yet)",
-                             style={"color": 0xFF888888})
+                # --- collapsible wire checklist ---
+                mem_count = len(b["members"])
+                checklist_label = (f"Wires ({mem_count} selected)"
+                                   if mem_count else "Wires (none selected)")
+                with ui.CollapsableFrame(checklist_label, collapsed=mem_count > 0):
+                    with ui.VStack(spacing=2, height=0):
+                        compatible = [w for w in self._wires
+                                      if self._types[w["type_index"]].get("kind") == "wire"]
+                        if compatible:
+                            for w in compatible:
+                                in_bundle = w["name"] in b["members"]
+                                color = self._types[w["type_index"]]["color"]
+                                with ui.HStack(height=0, spacing=6):
+                                    tick_col = _abgr(color) if in_bundle else 0xFF444444
+                                    ui.Rectangle(
+                                        width=14, height=14,
+                                        tooltip="Click to add/remove from bundle",
+                                        style={"background_color": tick_col,
+                                               "border_radius": 3},
+                                    ).set_mouse_pressed_fn(
+                                        lambda _x, _y, _b, _m, wn=w["name"], i=bi:
+                                            self._toggle_bundle_member(i, wn))
+                                    ui.Label(w["name"], width=160,
+                                             style={"color": 0xFFDDDDDD
+                                                    if in_bundle else 0xFF888888})
+                                    if in_bundle:
+                                        ui.Label("in bundle",
+                                                 style={"color": 0xFF33CC33,
+                                                        "font_size": 12})
+                        else:
+                            ui.Label("  (no wire-type wires in the scene yet)",
+                                     style={"color": 0xFF888888})
                 if b["status"] == "no_path" and b.get("reason"):
                     ui.Label(f"   -> {b['reason']}", word_wrap=True,
                              style={"color": _BAD, "font_size": 12})
@@ -336,10 +358,23 @@ class PipeRouterPanel:
         if idx < len(self._bundles):
             self._bundles[idx]["name"] = model.get_value_as_string()
 
-    def _set_bundle_kind(self, idx, model):
-        if idx < len(self._bundles):
+    def _bundles_with_cost(self):
+        """Return bundles list with bundle_type_cost_pm injected from the harness type."""
+        result = []
+        for b in self._bundles:
+            entry = dict(b)
+            tid = b.get("type_id", "")
+            bt = next((t for t in self._bundle_types if t["id"] == tid), None)
+            entry["bundle_type_cost_pm"] = float(bt["cost_per_m"]) if bt else 0.0
+            result.append(entry)
+        return result
+
+    def _set_bundle_type(self, idx, model):
+        if idx < len(self._bundles) and self._bundle_types:
             i = int(model.get_item_value_model().get_value_as_int())
-            self._bundles[idx]["kind"] = "wire" if i == 0 else "pipe"
+            i = max(0, min(i, len(self._bundle_types) - 1))
+            self._bundles[idx]["type_index"] = i
+            self._bundles[idx]["type_id"] = self._bundle_type_ids[i]
 
     def _delete_bundle(self, idx):
         if idx >= len(self._bundles):
@@ -371,8 +406,7 @@ class PipeRouterPanel:
             b["members"].remove(wire_name)
         else:
             b["members"].append(wire_name)
-        # Re-aggregate trunk weights from current members as a suggested starting point
-        # (only updates keys that haven't been manually changed from default 1.0)
+        # Re-aggregate trunk weights from wire members as a starting point
         members = [w for w in self._wires if w["name"] in b["members"]]
         if members:
             for k in _WEIGHTS:
@@ -690,7 +724,13 @@ class PipeRouterPanel:
                         w["combo"] = combo
                         figs = (f"{w['length_m']:.2f}m ${w['cost']:.0f}"
                                 if w["status"] == "routed" else "")
-                        ui.Label(figs, width=80, style={"color": 0xFFAAAAAA})
+                        ui.Label(figs, width=60, style={"color": 0xFFAAAAAA})
+                        ui.Button("S", width=22, tooltip="Select start marker",
+                                  clicked_fn=lambda kk=w["key"]: self._api.select_prim(
+                                      f"{scene_ops.MARKERS_SCOPE}/{kk}_start"))
+                        ui.Button("E", width=22, tooltip="Select end marker",
+                                  clicked_fn=lambda kk=w["key"]: self._api.select_prim(
+                                      f"{scene_ops.MARKERS_SCOPE}/{kk}_end"))
                         ui.Button("X", width=22, clicked_fn=lambda i=idx: self._delete_wire(i))
         finally:
             self._building = False
@@ -835,6 +875,22 @@ class PipeRouterPanel:
         if status == "no_path" and b.get("reason"):
             ui.Label(f"No path: {b['reason']}", word_wrap=True,
                      style={"color": _BAD})
+        # harness type selector (controls trunk BOM cost)
+        if self._bundle_type_labels:
+            with ui.HStack(height=0):
+                ui.Label("Harness type", width=110,
+                         tooltip="Sets cost/m for the trunk BOM row.")
+                tidx = b.get("type_index", 0)
+                btc = ui.ComboBox(tidx, *self._bundle_type_labels)
+                btc.model.add_item_changed_fn(
+                    lambda m, e, i=bidx: self._set_bundle_type(i, m))
+            # show cost for selected type
+            bt = (self._bundle_types[b.get("type_index", 0)]
+                  if self._bundle_types else None)
+            if bt:
+                ui.Label(f"  ${bt['cost_per_m']:.2f}/m  |  "
+                         f"{bt['mass_per_m_kg']*1000:.0f} g/m",
+                         style={"color": 0xFF999999, "font_size": 12})
         ui.Label("Trunk constraints (applied to the shared trunk segment).",
                  style={"color": 0xFF999999})
         self._bundle_sliders = {}
@@ -980,7 +1036,7 @@ class PipeRouterPanel:
         has_bundles = bool(self._bundles)
         if has_bundles:
             results, bom, err = self._api.route_all_bundles(
-                wires, self._bundles,
+                wires, self._bundles_with_cost(),
                 self._res.model.get_value_as_int(),
                 self._url_value())
         else:
@@ -1085,7 +1141,7 @@ class PipeRouterPanel:
         pairs = [(w, self._gather_wire(w, i)) for i, w in enumerate(self._wires)]
         wires = [g for (_w, g) in pairs if g]
         results, bom, err = self._api.route_all_bundles(
-            wires, self._bundles,        # pass ALL bundles, not just the triggered ones
+            wires, self._bundles_with_cost(),   # ALL bundles with harness type costs
             self._res.model.get_value_as_int(),
             self._url_value())
         if err:
