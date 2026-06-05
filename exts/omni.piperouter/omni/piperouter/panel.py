@@ -635,7 +635,8 @@ class PipeRouterPanel:
                 "weights": {k: 1.0 for k in _WEIGHTS}, "waypoints": [], "wp_counter": 0,
                 "locked": False, "polyline": None, "status": "unrouted",
                 "length_m": 0.0, "cost": 0.0, "combo": None, "name_model": None,
-                "_swatch": None, "start_head_idx": 0, "end_head_idx": 0, "reason": ""}
+                "_swatch": None, "start_head_idx": 0, "end_head_idx": 0, "reason": "",
+                "cells": [], "raw_polyline": None}
 
     def _add_wire(self):
         stage = self._get_stage()
@@ -864,6 +865,29 @@ class PipeRouterPanel:
                 ui.Button("Re-route this wire", clicked_fn=self._on_refine,
                           style={"background_color": _PRIMARY, "color": 0xFFFFFFFF})
                 ui.Button("Unlock" if w["locked"] else "Lock", clicked_fn=self._toggle_lock)
+            # --- per-wire debug visualizations ---
+            ui.Rectangle(height=1, style={"background_color": 0xFF333333})
+            ui.Label("Debug view (authors into /World/PipeRouter/debug):",
+                     style={"color": 0xFF999999})
+            _WIRE_DEBUG_MODES = (
+                "None",
+                "Wire cells (claimed voxels)",
+                "Grid vs smooth path",
+                "Soft-cost terrain",
+                "Bend-radius heatmap",
+            )
+            _WIRE_DEBUG_IDS = (
+                "none", "cells", "raw_path", "cost_terrain", "bend_radius",
+            )
+            dd = ui.ComboBox(0, *_WIRE_DEBUG_MODES)
+            dd.model.add_item_changed_fn(
+                lambda m, e, ww=w, ids=_WIRE_DEBUG_IDS:
+                    self._on_wire_debug(ww, ids[int(m.get_item_value_model().get_value_as_int())]))
+
+    def _on_wire_debug(self, wire, mode):
+        err = self._api.show_wire_debug(wire, mode)
+        if err:
+            self._progress.text = err
 
     def _rebuild_inspector_bundle(self, bidx):
         """Bundle inspector shown inside the Selected wire frame when a bundle is selected."""
@@ -1062,6 +1086,8 @@ class PipeRouterPanel:
                 w["status"] = r["status"]
                 w["polyline"] = r.get("polyline") if r["status"] == "routed" else None
                 w["reason"] = r.get("reason", "") if r["status"] != "routed" else ""
+                w["cells"] = r.get("cells", [])
+                w["raw_polyline"] = r.get("raw_polyline") if r["status"] == "routed" else None
         for b_row in (bom or []):
             for w in self._wires:
                 if w["name"] == b_row["wire_id"]:
@@ -1119,6 +1145,8 @@ class PipeRouterPanel:
         w["status"] = result["status"] if result else "no_path"
         w["polyline"] = result.get("polyline") if w["status"] == "routed" else None
         w["reason"] = result.get("reason", "") if result and w["status"] != "routed" else ""
+        w["cells"] = result.get("cells", []) if result else []
+        w["raw_polyline"] = result.get("raw_polyline") if result and w["status"] == "routed" else None
         if bom_row:
             w["length_m"] = bom_row["length_m"]
             w["cost"] = bom_row["cost"]

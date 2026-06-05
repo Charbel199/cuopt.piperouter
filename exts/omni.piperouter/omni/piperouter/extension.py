@@ -178,7 +178,7 @@ class PipeRouterExtension(omni.ext.IExt):
             grids = getattr(s, "last_grids", None)
             if grids is not None:
                 # occ already has the safety clearance baked in (compute_grids)
-                gbmin, cell, res, occ, thermal, em = grids
+                gbmin, cell, res, occ, _sd, thermal, em = grids
             else:
                 gbmin, cell, res, occ, _sd, thermal, em = s.compute_grids(
                     stage, resolution, clearance_m=clearance_m)
@@ -227,6 +227,97 @@ class PipeRouterExtension(omni.ext.IExt):
             carb.log_error(f"[piperouter] overlay failed: {exc}")
             return str(exc)
 
+    def show_wire_debug(self, wire, mode):
+        """Author per-wire debug geometry under /World/PipeRouter/debug.
+        mode: "cells" | "raw_path" | "cost_terrain" | "clearance" | "bend_radius" | "none"
+        """
+        try:
+            import numpy as np
+            stage = self._get_stage()
+            if stage is None:
+                return "no USD stage is open"
+            scene_ops.clear_debug(stage)
+            if mode == "none" or not wire:
+                return None
+
+            wire_name = wire.get("name", "?")
+            spec = wire.get("spec", {})
+            color = tuple(float(c) for c in spec.get("color", (0.8, 0.1, 0.1)))
+
+            s = getattr(self, "_session", None)
+            grids = getattr(s, "last_grids", None) if s else None
+
+            if mode == "cells":
+                cells = wire.get("cells", [])
+                if not cells or grids is None:
+                    return "[piperouter] cells: no cell data (route first)"
+                gbmin, cell, _res, _occ, _sd, _th, _em = grids
+                scene_ops.author_wire_cells(stage, wire_name, cells,
+                                            gbmin, cell, color=color)
+                carb.log_info(f"[piperouter] wire debug 'cells': {len(cells)} voxels for {wire_name}")
+
+            elif mode == "raw_path":
+                raw = wire.get("raw_polyline")
+                if not raw:
+                    return "[piperouter] raw_path: no raw polyline (route first)"
+                poly = wire.get("polyline", [])
+                scene_ops.author_raw_path(stage, wire_name + "_raw", raw,
+                                          color=(0.9, 0.9, 0.1))
+                if poly and len(poly) >= 2:
+                    scene_ops.author_tube(stage,
+                                          f"{scene_ops.DEBUG_SCOPE}/smooth_{wire_name}",
+                                          poly, 0.025, color)
+                carb.log_info(f"[piperouter] wire debug 'raw_path': {len(raw)} raw pts, {len(poly)} smooth pts")
+
+            elif mode == "cost_terrain":
+                if grids is None:
+                    return "[piperouter] cost_terrain: route first"
+                cells = wire.get("cells", [])
+                if not cells:
+                    return "[piperouter] cost_terrain: route first (no path cells)"
+                from . import fields as ext_fields
+                gbmin, cell, res, occ, sd, thermal, em = grids
+                nx, ny, nz = int(res[0]), int(res[1]), int(res[2])
+                weights = wire.get("weights", {})
+                cost = ext_fields.soft_cost_field(sd, thermal, em, spec, weights)
+
+                # Build a mask of cells within CORRIDOR_R cells of the wire's path
+                CORRIDOR_R = 6
+                path_mask = np.zeros((nx, ny, nz), dtype=bool)
+                for ci, cj, ck in cells:
+                    i0, i1 = max(0, ci - CORRIDOR_R), min(nx, ci + CORRIDOR_R + 1)
+                    j0, j1 = max(0, cj - CORRIDOR_R), min(ny, cj + CORRIDOR_R + 1)
+                    k0, k1 = max(0, ck - CORRIDOR_R), min(nz, ck + CORRIDOR_R + 1)
+                    path_mask[i0:i1, j0:j1, k0:k1] = True
+
+                mask = path_mask & (cost > 1e-3)
+                ijk = np.argwhere(mask).astype(np.float64)
+                if len(ijk) == 0:
+                    return "[piperouter] cost_terrain: costs are ~zero near this path (check sliders)"
+                centres = np.asarray(gbmin, dtype=np.float64) + (ijk + 0.5) * float(cell)
+                cv = cost[mask]
+                hi = float(cv.max()) + 1e-6
+                t01 = np.clip(cv / hi, 0.0, 1.0)
+                # blue (cheap near path) -> red (expensive near path)
+                cols = np.column_stack([t01, 1.0 - t01, np.zeros_like(t01)])
+                scene_ops.author_colored_points(stage,
+                    f"{scene_ops.DEBUG_SCOPE}/cost_{wire_name}", centres, cols,
+                    size=float(cell) * 0.55)
+                carb.log_info(f"[piperouter] wire debug 'cost_terrain': {len(centres)} corridor cells")
+
+            elif mode == "bend_radius":
+                poly = wire.get("polyline")
+                if not poly or len(poly) < 3:
+                    return "[piperouter] bend_radius: route first"
+                min_bend = float(spec.get("min_bend_radius_mm", 50.0))
+                scene_ops.author_bend_heatmap(stage, wire_name, poly, min_bend)
+                carb.log_info(f"[piperouter] wire debug 'bend_radius': min={min_bend}mm")
+
+            return None
+        except Exception as exc:
+            carb.log_error(f"[piperouter] wire debug failed: {exc}")
+            return str(exc)
+
     def slice_views(self, routes, target_px=1024):
         """Render the XY/XZ/YZ projection images from the EXACT routing grid (last
         voxelize), so the obstacles + clearance halo shown are precisely what the
@@ -239,7 +330,7 @@ class PipeRouterExtension(omni.ext.IExt):
             grids = getattr(s, "last_grids", None)
             if grids is None:
                 return None, "route first (no voxel grids yet)"
-            gbmin, cell, res, occ, thermal, em = grids
+            gbmin, cell, res, occ, _sd, thermal, em = grids
             # occ already includes the clearance keep-out (baked in compute_grids),
             # so there's no separate halo to draw — show the prohibited voxels as-is
             imgs = slices.render_views(gbmin, cell, res, occ, thermal, routes,

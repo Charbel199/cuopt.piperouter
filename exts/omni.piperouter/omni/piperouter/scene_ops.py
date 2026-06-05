@@ -144,6 +144,84 @@ def author_colored_points(stage, path, points, colors, size=0.02):
     return pts_prim
 
 
+def author_wire_cells(stage, wire_name, cells, gbmin, cell_size, color=(0.8, 0.1, 0.1),
+                      cap=100_000):
+    """Point cloud of the voxel cells the router claimed for this wire, in the wire's color."""
+    import numpy as np
+    if not cells:
+        return
+    ijk = np.asarray(cells, dtype=np.float64)
+    centres = np.asarray(gbmin, dtype=np.float64) + (ijk + 0.5) * float(cell_size)
+    step = max(1, len(centres) // cap)
+    centres = centres[::step]
+    author_points(stage, f"{DEBUG_SCOPE}/cells_{wire_name}", centres,
+                  size=float(cell_size) * 0.5, color=color)
+
+
+def author_raw_path(stage, wire_name, raw_polyline, color=(0.8, 0.8, 0.0)):
+    """BasisCurves for the stair-stepped grid path BEFORE smoothing."""
+    if not raw_polyline or len(raw_polyline) < 2:
+        return
+    crv = UsdGeom.BasisCurves.Define(stage, f"{DEBUG_SCOPE}/raw_{wire_name}")
+    pts = [Gf.Vec3f(float(p[0]), float(p[1]), float(p[2])) for p in raw_polyline]
+    crv.GetPointsAttr().Set(pts)
+    crv.GetCurveVertexCountsAttr().Set([len(pts)])
+    crv.GetTypeAttr().Set(UsdGeom.Tokens.linear)
+    crv.GetWidthsAttr().Set([0.02] * len(pts))
+    crv.SetWidthsInterpolation(UsdGeom.Tokens.vertex)
+    crv.GetDisplayColorAttr().Set([Gf.Vec3f(float(color[0]), float(color[1]), float(color[2]))])
+
+
+def author_bend_heatmap(stage, wire_name, polyline, min_bend_radius_mm, cap=5_000):
+    """BasisCurves coloured green/yellow/red by local curvature:
+       green = radius > 1.5× min_bend, yellow = 0.5-1.5×, red = below limit."""
+    import numpy as np
+    pts = [np.asarray(p, dtype=np.float64) for p in polyline]
+    if len(pts) < 3:
+        return
+    colors = []
+    seg_colors = []
+    # compute curvature radius at each interior vertex
+    for i in range(len(pts)):
+        if i == 0 or i == len(pts) - 1:
+            seg_colors.append((0.3, 0.9, 0.3))   # endpoints default green
+            continue
+        a, b, c = pts[i - 1], pts[i], pts[i + 1]
+        ab, bc = b - a, c - b
+        n_ab, n_bc = np.linalg.norm(ab), np.linalg.norm(bc)
+        if n_ab < 1e-9 or n_bc < 1e-9:
+            seg_colors.append((0.3, 0.9, 0.3))
+            continue
+        cos_a = float(np.clip(np.dot(ab / n_ab, bc / n_bc), -1.0, 1.0))
+        angle = np.arccos(cos_a)          # turning angle in radians
+        chord = float(n_ab + n_bc) / 2.0
+        if angle < 1e-6:
+            r_mm = 1e9
+        else:
+            r_mm = (chord / (2.0 * np.sin(angle / 2.0))) * 1000.0
+        ratio = r_mm / max(float(min_bend_radius_mm), 1.0)
+        if ratio >= 1.5:
+            seg_colors.append((0.1, 0.85, 0.1))  # green — well within spec
+        elif ratio >= 0.8:
+            seg_colors.append((0.9, 0.7, 0.0))   # yellow — near limit
+        else:
+            seg_colors.append((0.95, 0.1, 0.1))  # red — violating min bend
+
+    step = max(1, len(pts) // cap)
+    pts_sub = pts[::step]
+    cols_sub = seg_colors[::step]
+    gf_pts = [Gf.Vec3f(float(p[0]), float(p[1]), float(p[2])) for p in pts_sub]
+    gf_cols = [Gf.Vec3f(*c) for c in cols_sub]
+    crv = UsdGeom.BasisCurves.Define(stage, f"{DEBUG_SCOPE}/bend_{wire_name}")
+    crv.GetPointsAttr().Set(gf_pts)
+    crv.GetCurveVertexCountsAttr().Set([len(gf_pts)])
+    crv.GetTypeAttr().Set(UsdGeom.Tokens.linear)
+    crv.GetWidthsAttr().Set([0.03] * len(gf_pts))
+    crv.SetWidthsInterpolation(UsdGeom.Tokens.vertex)
+    crv.GetDisplayColorAttr().Set(gf_cols)
+    crv.GetDisplayColorPrimvar().SetInterpolation(UsdGeom.Tokens.vertex)
+
+
 def clear_debug(stage):
     prim = stage.GetPrimAtPath(DEBUG_SCOPE)
     if prim and prim.IsValid():

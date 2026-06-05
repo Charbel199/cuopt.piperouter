@@ -80,6 +80,8 @@ class RouteOut(BaseModel):
     polyline: list[list[float]] = Field(default_factory=list)
     length_m: float = 0.0
     reason: str = ""
+    cells: list[list[int]] = Field(default_factory=list)       # voxel (i,j,k) path
+    raw_polyline: list[list[float]] = Field(default_factory=list)  # pre-smoothing grid path
 
 
 class SolveAllOut(BaseModel):

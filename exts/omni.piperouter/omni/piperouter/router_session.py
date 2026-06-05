@@ -112,7 +112,7 @@ class RouterSession:
         path.parent.mkdir(parents=True, exist_ok=True)
         grid_io.save_grids(path, gbmin, cell, res, occ, sd, thermal, em)
         self.frame = (gbmin, cell, res)
-        self.last_grids = (gbmin, cell, res, occ, thermal, em)  # cached for views/overlay
+        self.last_grids = (gbmin, cell, res, occ, sd, thermal, em)  # + sd for debug views
         return session_id
 
     def route_all(self, stage, session_id, wires):

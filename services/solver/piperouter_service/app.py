@@ -32,6 +32,9 @@ def _route_out(res: RouteResult) -> RouteOut:
         polyline=[[float(x) for x in p] for p in res.polyline],
         length_m=float(res.length_m),
         reason=getattr(res, "reason", "") or "",
+        cells=[[int(v) for v in c] for c in getattr(res, "cells", [])],
+        raw_polyline=[[float(x) for x in p]
+                      for p in getattr(res, "raw_polyline", [])],
     )
 
 

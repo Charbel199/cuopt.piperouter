@@ -91,6 +91,9 @@ class Solver:
             fixed_flags.append(fx)
         fixed_idx = [i for i, fx in enumerate(fixed_flags) if fx]
 
+        # Capture the pre-smoothing grid path (stair-stepped) for debug views.
+        raw_polyline = [[float(x) for x in p] for p in polyline]
+
         # Fibre-neutre smoothing (cuSolver least-squares), hard-safe against the
         # same prohibited voxels the lattice avoided. weights["smoothing"] == 0 -> off.
         strength = float(req.weights.get("smoothing", 1.0))
@@ -113,6 +116,7 @@ class Solver:
         return RouteResult(
             wire_id=req.wire.id, status="routed",
             polyline=polyline, length_m=length, cells=all_cells,
+            raw_polyline=raw_polyline,
         )
 
     def route_all(self, stack, requests: list[RouteRequest]) -> SolveReport:

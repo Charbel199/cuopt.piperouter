@@ -96,3 +96,30 @@ def em_field(bounds_min, cell_size, res_xyz, sources):
     from multiple emitters add up; clamped to >= 0."""
     f = splat_field(bounds_min, cell_size, res_xyz, sources, ambient=0.0, mode="sum")
     return np.clip(f, 0.0, None).astype(np.float32)
+
+
+def _normalize(arr):
+    a = arr.astype(np.float32)
+    lo, hi = float(a.min()), float(a.max())
+    if hi - lo <= 1e-12:
+        return np.zeros_like(a)
+    return (a - lo) / (hi - lo)
+
+
+def soft_cost_field(surface_dist, thermal, em, wire_spec, weights):
+    """Combined soft-cost field (0..N) for the given wire and slider weights.
+
+    Mirrors the solver-side soft_cost_field so the extension can visualise the
+    routing terrain for a selected wire without hitting the solver.
+
+    wire_spec: dict with 'em_sensitivity'.
+    weights:   dict with 'surface', 'thermal', 'em' keys (0..10).
+    """
+    w_surface = float(weights.get("surface", 0.0))
+    w_thermal = float(weights.get("thermal", 0.0))
+    w_em = float(weights.get("em", 0.0))
+    em_sens = float(wire_spec.get("em_sensitivity", 0.0))
+    cost = (w_surface * _normalize(surface_dist)
+            + w_thermal * _normalize(thermal)
+            + w_em * em_sens * _normalize(em))
+    return cost.astype(np.float32)
