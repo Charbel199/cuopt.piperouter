@@ -39,6 +39,7 @@ def test_clearance_affects_route_all(solver_server):
     # gap seals at a large clearance -> proves clearance flows through route_all.
     from pxr import Usd, UsdGeom
     stage = Usd.Stage.CreateInMemory()
+    UsdGeom.SetStageMetersPerUnit(stage, 1.0)
     UsdGeom.Xform.Define(stage, "/World")
     scene_ops.author_box_mesh(stage, "/World/a", (1.0, 0.3, 0.5), (0.6, 0.4, 1.2))
     scene_ops.author_box_mesh(stage, "/World/b", (1.0, 1.3, 0.5), (0.6, 0.4, 1.2))
@@ -67,6 +68,7 @@ def test_no_path_reason_flows_through_http(solver_server):
     # reason that survives the solver schema + HTTP round-trip into the BOM row.
     from pxr import Usd, UsdGeom
     stage = Usd.Stage.CreateInMemory()
+    UsdGeom.SetStageMetersPerUnit(stage, 1.0)
     UsdGeom.Xform.Define(stage, "/World")
     scene_ops.author_box_mesh(stage, "/World/block", (1.0, 0.5, 0.5), (0.6, 0.6, 0.6))
     start, end = (0.1, 0.5, 0.5), (1.0, 0.5, 0.5)  # end sits inside the block
@@ -164,6 +166,7 @@ def test_bundle_trunk_and_branches_routed(solver_server):
     base, grid_dir = solver_server
     stage = Usd.Stage.CreateInMemory()
     from pxr import UsdGeom as _UG
+    _UG.SetStageMetersPerUnit(stage, 1.0)
     _UG.Xform.Define(stage, "/World")
     # a simple open scene (no obstacles except a ground plane)
     scene_ops.author_box_mesh(stage, "/World/ground",
@@ -221,6 +224,7 @@ def test_wire_in_two_bundles_routes_through_both_trunks(solver_server):
     base, grid_dir = solver_server
     stage = Usd.Stage.CreateInMemory()
     from pxr import UsdGeom as _UG
+    _UG.SetStageMetersPerUnit(stage, 1.0)
     _UG.Xform.Define(stage, "/World")
     scene_ops.author_box_mesh(stage, "/World/ground",
                               (3.0, 1.0, -0.05), (8.0, 4.0, 0.05))

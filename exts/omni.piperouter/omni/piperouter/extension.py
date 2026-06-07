@@ -74,6 +74,7 @@ class PipeRouterExtension(omni.ext.IExt):
         try:
             wires = sample_scene.build_sample_scene(stage)
             carb.log_info(f"[piperouter] sample scene created with {len(wires)} wires")
+            self._frame_scene(stage)
             return wires, None
         except Exception as exc:
             carb.log_error(f"[piperouter] sample scene failed: {exc}")
@@ -87,10 +88,83 @@ class PipeRouterExtension(omni.ext.IExt):
         try:
             wires = sample_scene.build_complex_scene(stage)
             carb.log_info(f"[piperouter] complex scene created with {len(wires)} wires")
+            self._frame_scene(stage)
             return wires, None
         except Exception as exc:
             carb.log_error(f"[piperouter] complex scene failed: {exc}")
             return None, str(exc)
+
+    def _frame_scene(self, stage):
+        """Fit the active viewport camera to show the whole scene.
+
+        Tries the Kit command API first (most reliable), then falls back to
+        manually positioning the perspective camera based on the scene bounding box.
+        Fully guarded — a failure here is non-critical.
+        """
+        try:
+            import numpy as np
+            from pxr import Gf, Usd, UsdGeom
+
+            # Compute world bounding box of /World
+            world = stage.GetPrimAtPath("/World")
+            if not world or not world.IsValid():
+                return
+            bbox_cache = UsdGeom.BBoxCache(
+                Usd.TimeCode.Default(), ["default", "render"])
+            bbox = bbox_cache.ComputeWorldBound(world)
+            rng = bbox.GetRange()
+            if rng.IsEmpty():
+                return
+
+            center = rng.GetMidpoint()
+            size   = rng.GetSize()
+            diag   = float(Gf.Vec3d(*size).GetLength())
+
+            # --- Try Kit command approach first ---
+            try:
+                import omni.usd
+                import omni.kit.commands
+                omni.usd.get_context().get_selection().set_selected_prim_paths(
+                    ["/World"], True)
+                # Try several command names used in different Kit versions
+                for cmd in ("FrameViewportSelection",
+                            "FocusViewport",
+                            "ViewportFrameSelection"):
+                    try:
+                        omni.kit.commands.execute(cmd)
+                        carb.log_info(f"[piperouter] framed scene via command '{cmd}'")
+                        omni.usd.get_context().get_selection().clear_selected_prim_paths()
+                        return
+                    except Exception:
+                        continue
+                omni.usd.get_context().get_selection().clear_selected_prim_paths()
+            except Exception:
+                pass
+
+            # --- Fallback: move the perspective camera via USD ---
+            # Place it at ~1.5× the diagonal from the center, slightly above and back.
+            cam_prim = stage.GetPrimAtPath("/OmniverseKit_Persp")
+            if not cam_prim or not cam_prim.IsValid():
+                cam_prim = stage.GetPrimAtPath("/World/Camera")
+            if not cam_prim or not cam_prim.IsValid():
+                carb.log_info("[piperouter] _frame_scene: no perspective camera found, "
+                              "press F in the viewport to frame the scene")
+                return
+
+            dist = diag * 1.5
+            cam_pos = Gf.Vec3d(
+                float(center[0]),
+                float(center[1]) + dist * 0.5,
+                float(center[2]) + dist,
+            )
+            xf = UsdGeom.Xformable(cam_prim)
+            ops = [o for o in xf.GetOrderedXformOps()
+                   if o.GetOpType() == UsdGeom.XformOp.TypeTranslate]
+            op = ops[0] if ops else xf.AddTranslateOp()
+            op.Set(cam_pos)
+            carb.log_info(f"[piperouter] framed scene: camera moved to {cam_pos}")
+        except Exception as exc:
+            carb.log_warn(f"[piperouter] _frame_scene failed (non-critical): {exc}")
 
     def route_all(self, wires, resolution, url):
         try:
@@ -200,13 +274,16 @@ class PipeRouterExtension(omni.ext.IExt):
                 carb.log_warn(f"[piperouter] overlay '{mode}': nothing to show{hint}")
                 return f"overlay '{mode}': nothing to show{hint}"
 
-            centers = gbmin + (ijk + 0.5) * cell
+            # grid is in METERS; convert centres + point size back to stage units
+            inv = 1.0 / float(getattr(s, "mpu", 1.0) or 1.0)
+            centers = (gbmin + (ijk + 0.5) * cell) * inv
+            cell_stage = cell * inv
             cap = 200000  # subsample so a fine grid doesn't author millions of points
             step = (len(centers) // cap + 1) if len(centers) > cap else 1
 
             if mode == "occupancy":
                 scene_ops.author_points(stage, scene_ops.DEBUG_SCOPE + "/occ",
-                                        centers[::step], size=cell * 0.4,
+                                        centers[::step], size=cell_stage * 0.4,
                                         color=(0.2, 0.6, 1.0))
             else:
                 v = vals[mask]
@@ -218,7 +295,7 @@ class PipeRouterExtension(omni.ext.IExt):
                     colors = np.stack([t01, 1.0 - t01, np.full_like(t01, 0.7)], axis=1)
                 scene_ops.author_colored_points(
                     stage, scene_ops.DEBUG_SCOPE + f"/{mode}",
-                    centers[::step], colors[::step], size=cell * 0.5)
+                    centers[::step], colors[::step], size=cell_stage * 0.5)
 
             carb.log_info(f"[piperouter] overlay '{mode}': {len(ijk)} cells "
                           f"(showing {len(centers[::step])})")
@@ -246,6 +323,9 @@ class PipeRouterExtension(omni.ext.IExt):
 
             s = getattr(self, "_session", None)
             grids = getattr(s, "last_grids", None) if s else None
+            # The grids/polylines are in METERS (solver space); convert lengths back
+            # to stage units when authoring debug geometry so it lines up with the USD.
+            inv = 1.0 / float(getattr(s, "mpu", 1.0) or 1.0)
 
             if mode == "cells":
                 cells = wire.get("cells", [])
@@ -253,7 +333,8 @@ class PipeRouterExtension(omni.ext.IExt):
                     return "[piperouter] cells: no cell data (route first)"
                 gbmin, cell, _res, _occ, _sd, _th, _em = grids
                 scene_ops.author_wire_cells(stage, wire_name, cells,
-                                            gbmin, cell, color=color)
+                                            np.asarray(gbmin) * inv, float(cell) * inv,
+                                            color=color)
                 carb.log_info(f"[piperouter] wire debug 'cells': {len(cells)} voxels for {wire_name}")
 
             elif mode == "raw_path":
@@ -261,12 +342,14 @@ class PipeRouterExtension(omni.ext.IExt):
                 if not raw:
                     return "[piperouter] raw_path: no raw polyline (route first)"
                 poly = wire.get("polyline", [])
-                scene_ops.author_raw_path(stage, wire_name + "_raw", raw,
+                raw_s = (np.asarray(raw, dtype=np.float64) * inv).tolist()
+                scene_ops.author_raw_path(stage, wire_name + "_raw", raw_s,
                                           color=(0.9, 0.9, 0.1))
                 if poly and len(poly) >= 2:
+                    poly_s = (np.asarray(poly, dtype=np.float64) * inv).tolist()
                     scene_ops.author_tube(stage,
                                           f"{scene_ops.DEBUG_SCOPE}/smooth_{wire_name}",
-                                          poly, 0.025, color)
+                                          poly_s, 0.025 * inv, color)
                 carb.log_info(f"[piperouter] wire debug 'raw_path': {len(raw)} raw pts, {len(poly)} smooth pts")
 
             elif mode == "cost_terrain":
@@ -294,7 +377,7 @@ class PipeRouterExtension(omni.ext.IExt):
                 ijk = np.argwhere(mask).astype(np.float64)
                 if len(ijk) == 0:
                     return "[piperouter] cost_terrain: costs are ~zero near this path (check sliders)"
-                centres = np.asarray(gbmin, dtype=np.float64) + (ijk + 0.5) * float(cell)
+                centres = (np.asarray(gbmin, dtype=np.float64) + (ijk + 0.5) * float(cell)) * inv
                 cv = cost[mask]
                 hi = float(cv.max()) + 1e-6
                 t01 = np.clip(cv / hi, 0.0, 1.0)
@@ -302,7 +385,7 @@ class PipeRouterExtension(omni.ext.IExt):
                 cols = np.column_stack([t01, 1.0 - t01, np.zeros_like(t01)])
                 scene_ops.author_colored_points(stage,
                     f"{scene_ops.DEBUG_SCOPE}/cost_{wire_name}", centres, cols,
-                    size=float(cell) * 0.55)
+                    size=float(cell) * inv * 0.55)
                 carb.log_info(f"[piperouter] wire debug 'cost_terrain': {len(centres)} corridor cells")
 
             elif mode == "bend_radius":
@@ -310,7 +393,8 @@ class PipeRouterExtension(omni.ext.IExt):
                 if not poly or len(poly) < 3:
                     return "[piperouter] bend_radius: route first"
                 min_bend = float(spec.get("min_bend_radius_mm", 50.0))
-                scene_ops.author_bend_heatmap(stage, wire_name, poly, min_bend)
+                scene_ops.author_bend_heatmap(stage, wire_name, poly, min_bend,
+                                              pos_scale=inv)
                 carb.log_info(f"[piperouter] wire debug 'bend_radius': min={min_bend}mm")
 
             return None

@@ -14,14 +14,53 @@ EM_ATTR = "piperouter:em_strength"
 
 
 def list_collidable_meshes(stage, exclude_prefixes=(PIPEROUTER_ROOT,)):
+    """Return all UsdGeom.Mesh prims outside the PipeRouter scope.
+
+    Handles drag-dropped USD assets (Xform payloads) which arrive as unloaded
+    payloads — grayed-out in the Stage panel. We force-load every unloaded prim
+    before traversing so their mesh contents become visible.
+
+    Also handles INSTANCED assets (CAD imports usually instance every repeated part:
+    the geometry lives once under /Prototypes and the scene holds instanceable
+    references to it — Omniverse shows those meshes greyed out as read-only instance
+    proxies). A plain stage.Traverse() skips inside instances entirely, so we traverse
+    with Usd.TraverseInstanceProxies() to see the proxy meshes. Their points (prototype
+    geometry) and world transforms (per-instance placement) read normally.
+    """
+    # Walk every prim (including unloaded payload roots) and explicitly load any
+    # that haven't been loaded yet. TraverseAll() visits inactive/unloaded roots
+    # that stage.Traverse() would skip.
+    try:
+        from pxr import Usd as _Usd
+        for prim in stage.TraverseAll():
+            if stage.GetLoadRules().GetEffectiveRuleForPath(
+                    prim.GetPath()) == _Usd.StageLoadRules.NoneRule:
+                try:
+                    stage.Load(prim.GetPath())
+                except Exception:
+                    pass
+    except Exception:
+        # Fallback: blanket load everything under root
+        try:
+            stage.Load("/")
+        except Exception:
+            pass
+
     out = []
-    for prim in stage.Traverse():
+    for prim in stage.Traverse(Usd.TraverseInstanceProxies()):
         if not prim.IsA(UsdGeom.Mesh):
             continue
         path = str(prim.GetPath())
         if any(path.startswith(p) for p in exclude_prefixes):
             continue
         out.append(prim)
+
+    try:
+        import logging as _log
+        _log.getLogger("piperouter").debug(
+            "[piperouter] list_collidable_meshes: found %d mesh(es)", len(out))
+    except Exception:
+        pass
     return out
 
 
@@ -172,9 +211,14 @@ def author_raw_path(stage, wire_name, raw_polyline, color=(0.8, 0.8, 0.0)):
     crv.GetDisplayColorAttr().Set([Gf.Vec3f(float(color[0]), float(color[1]), float(color[2]))])
 
 
-def author_bend_heatmap(stage, wire_name, polyline, min_bend_radius_mm, cap=5_000):
+def author_bend_heatmap(stage, wire_name, polyline, min_bend_radius_mm, cap=5_000,
+                         pos_scale=1.0):
     """BasisCurves coloured green/yellow/red by local curvature:
-       green = radius > 1.5× min_bend, yellow = 0.5-1.5×, red = below limit."""
+       green = radius > 1.5× min_bend, yellow = 0.5-1.5×, red = below limit.
+
+    The polyline is in METERS (solver space) so the curvature physics is correct;
+    pos_scale converts the AUTHORED point positions back to stage units (1/metersPerUnit)
+    without disturbing the radius computation."""
     import numpy as np
     pts = [np.asarray(p, dtype=np.float64) for p in polyline]
     if len(pts) < 3:
@@ -210,13 +254,14 @@ def author_bend_heatmap(stage, wire_name, polyline, min_bend_radius_mm, cap=5_00
     step = max(1, len(pts) // cap)
     pts_sub = pts[::step]
     cols_sub = seg_colors[::step]
-    gf_pts = [Gf.Vec3f(float(p[0]), float(p[1]), float(p[2])) for p in pts_sub]
+    ps = float(pos_scale)
+    gf_pts = [Gf.Vec3f(float(p[0]) * ps, float(p[1]) * ps, float(p[2]) * ps) for p in pts_sub]
     gf_cols = [Gf.Vec3f(*c) for c in cols_sub]
     crv = UsdGeom.BasisCurves.Define(stage, f"{DEBUG_SCOPE}/bend_{wire_name}")
     crv.GetPointsAttr().Set(gf_pts)
     crv.GetCurveVertexCountsAttr().Set([len(gf_pts)])
     crv.GetTypeAttr().Set(UsdGeom.Tokens.linear)
-    crv.GetWidthsAttr().Set([0.03] * len(gf_pts))
+    crv.GetWidthsAttr().Set([0.03 * ps] * len(gf_pts))
     crv.SetWidthsInterpolation(UsdGeom.Tokens.vertex)
     crv.GetDisplayColorAttr().Set(gf_cols)
     crv.GetDisplayColorPrimvar().SetInterpolation(UsdGeom.Tokens.vertex)

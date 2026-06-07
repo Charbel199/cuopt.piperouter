@@ -240,12 +240,13 @@ class PipeRouterPanel:
             return
         bid = f"b{self._bundle_counter}"
         self._bundle_counter += 1
+        inv = self._stage_inv(stage)  # meters -> stage units (cm/mm/m agnostic)
         merge_path = f"{scene_ops.MARKERS_SCOPE}/{bid}_merge"
         split_path = f"{scene_ops.MARKERS_SCOPE}/{bid}_split"
-        scene_ops.spawn_marker(stage, merge_path, (0.3, 0.3, 0.3),
-                               color=self._BUNDLE_START_COLOR, radius=0.06)
-        scene_ops.spawn_marker(stage, split_path, (0.8, 0.3, 0.3),
-                               color=self._BUNDLE_END_COLOR, radius=0.06)
+        scene_ops.spawn_marker(stage, merge_path, (0.3 * inv, 0.3 * inv, 0.3 * inv),
+                               color=self._BUNDLE_START_COLOR, radius=0.06 * inv)
+        scene_ops.spawn_marker(stage, split_path, (0.8 * inv, 0.3 * inv, 0.3 * inv),
+                               color=self._BUNDLE_END_COLOR, radius=0.06 * inv)
         default_type_id = self._bundle_type_ids[0] if self._bundle_type_ids else ""
         self._bundles.append({
             "id": bid, "name": bid, "kind": "wire",
@@ -667,17 +668,31 @@ class PipeRouterPanel:
                 "_swatch": None, "start_head_idx": 0, "end_head_idx": 0, "reason": "",
                 "cells": [], "raw_polyline": None}
 
+    @staticmethod
+    def _stage_inv(stage):
+        """1 / metersPerUnit for the stage, so we can place default markers at a fixed
+        PHYSICAL size (meters) regardless of whether the stage is cm (Omniverse default),
+        mm (CAD imports), or m (our sample scenes). Defaults sized in meters * inv land at
+        the right scale everywhere; the routing pipeline converts back to meters via mpu."""
+        try:
+            from pxr import UsdGeom
+            mpu = float(UsdGeom.GetStageMetersPerUnit(stage))
+            return 1.0 / mpu if mpu > 1e-9 else 1.0
+        except Exception:
+            return 1.0
+
     def _add_wire(self):
         stage = self._get_stage()
         if stage is None:
             self._progress.text = "open a USD stage first"
             return
+        inv = self._stage_inv(stage)  # meters -> stage units, so the wire is ~0.5 m anywhere
         key = f"wire_{self._key_counter}"
         self._key_counter += 1
         scene_ops.spawn_marker(stage, f"{scene_ops.MARKERS_SCOPE}/{key}_start",
-                               (0.0, 0.0, 0.0), color=(0.1, 0.9, 0.1), radius=0.06)
+                               (0.0, 0.0, 0.0), color=(0.1, 0.9, 0.1), radius=0.06 * inv)
         scene_ops.spawn_marker(stage, f"{scene_ops.MARKERS_SCOPE}/{key}_end",
-                               (0.5, 0.0, 0.0), color=(0.9, 0.1, 0.1), radius=0.06)
+                               (0.5 * inv, 0.0, 0.0), color=(0.9, 0.1, 0.1), radius=0.06 * inv)
         self._wires.append(self._new_wire(key, key))
         self._schedule(wires=True)
 
@@ -998,10 +1013,11 @@ class PipeRouterPanel:
         w["wp_counter"] += 1
         path = f"{scene_ops.MARKERS_SCOPE}/{w['key']}_wp{n}"
         # spawn near the wire's start so it's easy to find, then the user drags it
+        inv = self._stage_inv(stage)  # meters -> stage units (cm/mm/m agnostic)
         start = scene_ops.get_world_pos(stage, f"{scene_ops.MARKERS_SCOPE}/{w['key']}_start")
-        pos = (float(start[0]) + 0.3, float(start[1]), float(start[2])) if start is not None \
-            else (0.25, 0.0, 0.0)
-        scene_ops.spawn_marker(stage, path, pos, color=(0.1, 0.5, 0.9), radius=0.1)
+        pos = (float(start[0]) + 0.3 * inv, float(start[1]), float(start[2])) if start is not None \
+            else (0.25 * inv, 0.0, 0.0)
+        scene_ops.spawn_marker(stage, path, pos, color=(0.1, 0.5, 0.9), radius=0.1 * inv)
         w["waypoints"].append(path)
         self._api.select_prim(path)  # auto-select so it can be dragged immediately
         self._schedule(inspector=True)

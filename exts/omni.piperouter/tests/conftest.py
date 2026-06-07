@@ -13,6 +13,8 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 def make_cube_mesh_stage(center=(0.5, 0.5, 0.5), half=0.2):
     """In-memory stage with a single box Mesh (outward-wound quads)."""
     stage = Usd.Stage.CreateInMemory()
+    # Pin meters so the units-aware pipeline (geometry ×mpu) is an identity in tests.
+    UsdGeom.SetStageMetersPerUnit(stage, 1.0)
     UsdGeom.Xform.Define(stage, "/World")
     mesh = UsdGeom.Mesh.Define(stage, "/World/Obstacle")
     cx, cy, cz = center

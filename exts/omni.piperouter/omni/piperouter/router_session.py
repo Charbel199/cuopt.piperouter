@@ -40,6 +40,24 @@ class RouterSession:
         self.frame = None         # (bounds_min, cell_size, res_xyz) from the last voxelize
         self.last_stats = {}      # stats from the last compute_grids (for logging/UI)
         self.last_grids = None    # (bounds_min, cell, res, occ, thermal, em) for views/overlay
+        self.mpu = 1.0            # meters per stage unit (set in compute_grids)
+
+    @staticmethod
+    def _mpu(stage):
+        """Meters per stage unit from the stage's metersPerUnit metadata (Omniverse
+        default 0.01 = cm). The solver always works in meters; this is the conversion
+        factor between stage coordinates and meters."""
+        try:
+            from pxr import UsdGeom
+            v = float(UsdGeom.GetStageMetersPerUnit(stage))
+            return v if v > 1e-9 else 1.0
+        except Exception:
+            return 1.0
+
+    @staticmethod
+    def _scaled(pts, f):
+        """Scale a list of [x,y,z] points by factor f."""
+        return [[float(p[0]) * f, float(p[1]) * f, float(p[2]) * f] for p in pts]
 
     def compute_grids(self, stage, resolution=64, pad_frac=0.05, clearance_m=0.0):
         """Read the stage and build the four voxel grids (occupancy, surface distance,
@@ -48,19 +66,27 @@ class RouterSession:
         the prohibited-voxel set used by the router AND shown by the overlay/2D views —
         one source of truth. Shared by voxelize_scene and the debug overlay.
 
+        UNITS: the solver works in METERS. The stage may use any metersPerUnit (cm by
+        default in Omniverse, mm for many CAD imports), so all geometry read from the
+        stage is multiplied by `mpu` (meters per stage unit) here — the resulting grid
+        (gbmin, cell) is in METERS. The route methods convert endpoints/polylines at the
+        same boundary. self.mpu is cached for the authoring side.
+
         Returns: (bounds_min, cell_size, res_xyz, occupancy, surface_dist, thermal, em).
         """
         t0 = time.perf_counter()
+        mpu = self._mpu(stage)
+        self.mpu = mpu
         prims = scene_ops.list_collidable_meshes(stage)
         bounds = scene_ops.compute_bounds(stage, prims)
         if bounds is None:
             raise ValueError("no collidable geometry in stage")
-        bmin, bmax = bounds
+        bmin, bmax = np.asarray(bounds[0]) * mpu, np.asarray(bounds[1]) * mpu  # -> meters
         # Grow bounds to include all markers (endpoints + waypoints) so routing to a
         # marker dragged beyond the geometry isn't clamped to the grid edge.
         markers = scene_ops.marker_positions(stage)
         if markers:
-            mp = np.asarray(markers, dtype=float)
+            mp = np.asarray(markers, dtype=float) * mpu   # -> meters
             bmin = np.minimum(bmin, mp.min(axis=0))
             bmax = np.maximum(bmax, mp.max(axis=0))
         pad = (bmax - bmin) * pad_frac + 1e-3
@@ -68,6 +94,7 @@ class RouterSession:
 
         gbmin, cell, res = grid_io.frame_from_bounds(bmin, bmax, resolution)
         pts, idx = voxelizer.collect_meshes(stage, prims)
+        pts = np.asarray(pts, dtype=np.float32) * mpu     # stage units -> meters
         occ, sd = voxelizer.voxelize(pts, idx, gbmin, cell, res)
 
         # BAKE the safety clearance into the occupancy: grow prohibited voxels by
@@ -82,9 +109,12 @@ class RouterSession:
         # a region proportional to its size (a fixed falloff vanished once the scene
         # was scaled up). MIN_FALLOFF keeps tiny tagged prims from having ~zero reach.
         tags = scene_ops.read_thermal_em_tags(stage)
-        thermal_sources = [(c, t, max(MIN_FALLOFF_M, char + FIELD_MARGIN_M))
+        # source centres + characteristic size are in stage units -> scale to meters
+        thermal_sources = [(np.asarray(c) * mpu, t,
+                            max(MIN_FALLOFF_M, char * mpu + FIELD_MARGIN_M))
                            for (c, t, e, char) in tags if t is not None]
-        em_sources = [(c, e, max(MIN_FALLOFF_M, char + FIELD_MARGIN_M))
+        em_sources = [(np.asarray(c) * mpu, e,
+                       max(MIN_FALLOFF_M, char * mpu + FIELD_MARGIN_M))
                       for (c, t, e, char) in tags if e is not None]
         thermal = fields.thermal_field(gbmin, cell, res, thermal_sources)
         em = fields.em_field(gbmin, cell, res, em_sources)
@@ -117,15 +147,18 @@ class RouterSession:
 
     def route_all(self, stage, session_id, wires):
         """Returns (results, bom). Results are matched back to wires by unique name."""
+        mpu = self._mpu(stage)
+        inv = 1.0 / mpu
         routes = []
         for w in wires:
             spec = dict(w["spec"])
             spec["id"] = w["name"]  # unique per-route id (echoed back as wire_id)
             routes.append({
                 "wire": spec,
-                "start": [float(x) for x in w["start"]],
-                "end": [float(x) for x in w["end"]],
-                "waypoints": [[float(x) for x in wp] for wp in w.get("waypoints", [])],
+                # stage units -> meters for the solver
+                "start": self._scaled([w["start"]], mpu)[0],
+                "end": self._scaled([w["end"]], mpu)[0],
+                "waypoints": self._scaled(w.get("waypoints", []), mpu),
                 "weights": dict(w.get("weights", {})),
                 "connectivity": int(w.get("connectivity", 26)),
                 "priority": int(w.get("priority", 0)),
@@ -149,9 +182,10 @@ class RouterSession:
                 continue
             diameter = max(float(spec["outer_diameter_mm"]) / 1000.0, MIN_DISPLAY_DIAMETER_M)
             color = spec.get("color", (0.8, 0.1, 0.1))
+            # solver polyline is meters -> back to stage units for authoring
             scene_ops.author_tube(
                 stage, f"{scene_ops.ROUTES_SCOPE}/{res['wire_id']}",
-                res["polyline"], diameter, color)
+                self._scaled(res["polyline"], inv), diameter * inv, color)
             length = float(res["length_m"])
             bom.append({
                 "wire_id": res["wire_id"], "status": "routed", "length_m": length,
@@ -175,13 +209,15 @@ class RouterSession:
                 "outer_diameter_mm": float(lw["spec"]["outer_diameter_mm"]),
             })
 
+        mpu = self._mpu(stage)
+        inv = 1.0 / mpu
         spec = dict(wire["spec"])
         spec["id"] = wire["name"]
         route = {
             "wire": spec,
-            "start": [float(x) for x in wire["start"]],
-            "end": [float(x) for x in wire["end"]],
-            "waypoints": [[float(x) for x in wp] for wp in wire.get("waypoints", [])],
+            "start": self._scaled([wire["start"]], mpu)[0],
+            "end": self._scaled([wire["end"]], mpu)[0],
+            "waypoints": self._scaled(wire.get("waypoints", []), mpu),
             "weights": dict(wire.get("weights", {})),
             "connectivity": int(wire.get("connectivity", 26)),
             "clearance_m": 0.0,  # already baked into the voxel grid (compute_grids)
@@ -196,8 +232,8 @@ class RouterSession:
             stage.RemovePrim(existing.GetPath())
         if res["status"] == "routed":
             diameter = max(float(spec["outer_diameter_mm"]) / 1000.0, MIN_DISPLAY_DIAMETER_M)
-            scene_ops.author_tube(stage, path, res["polyline"], diameter,
-                                  spec.get("color", (0.8, 0.1, 0.1)))
+            scene_ops.author_tube(stage, path, self._scaled(res["polyline"], inv),
+                                  diameter * inv, spec.get("color", (0.8, 0.1, 0.1)))
             length = float(res["length_m"])
             bom_row = {"wire_id": res["wire_id"], "status": "routed", "length_m": length,
                        "cost": length * float(spec.get("cost_per_m", 0.0)),
@@ -228,6 +264,8 @@ class RouterSession:
         one per-wire colored tube (trunks are visually covered by their thick tubes).
         Returns (results, bom).
         """
+        mpu = self._mpu(stage)
+        inv = 1.0 / mpu
         member_names = {name for b in bundles for name in b["members"]}
         wire_by_name = {w["name"]: w for w in wires}
 
@@ -270,6 +308,10 @@ class RouterSession:
 
             merge_pos = scene_ops.get_world_pos(stage, b["merge_marker"])
             split_pos = scene_ops.get_world_pos(stage, b["split_marker"])
+            if merge_pos is not None:
+                merge_pos = np.asarray(merge_pos) * mpu   # stage units -> meters
+            if split_pos is not None:
+                split_pos = np.asarray(split_pos) * mpu
             if merge_pos is None or split_pos is None:
                 reason = "Bundle merge/split markers not found in stage."
                 for w in member_wires:
@@ -312,7 +354,7 @@ class RouterSession:
                              MIN_DISPLAY_DIAMETER_M)
             scene_ops.author_tube(
                 stage, f"{scene_ops.ROUTES_SCOPE}/bundle_{bid}_trunk",
-                trunk_poly, trunk_od_m, tuple(ts["color"]))
+                self._scaled(trunk_poly, inv), trunk_od_m * inv, tuple(ts["color"]))
 
             # Use the bundle's harness type cost_per_m when the panel has set it;
             # fall back to summing individual member wire costs.
@@ -356,19 +398,23 @@ class RouterSession:
                        MIN_DISPLAY_DIAMETER_M)
             color = spec.get("color", (0.8, 0.1, 0.1))
 
+            # wire endpoints stage units -> meters (trunk merge/split already meters)
+            w_start_m = self._scaled([w["start"]], mpu)[0]
+            w_end_m = self._scaled([w["end"]], mpu)[0]
+
             # Build the ordered list of (from_pos, to_pos, is_trunk, bundle_id)
-            # for this wire across all its bundles.
+            # for this wire across all its bundles. All positions in METERS.
             segments = []          # (from, to, is_trunk, bid)
             prev_split = None
             for b in wire_bundle_list:
                 td = trunk_data[b["id"]]
-                seg_start = prev_split if prev_split is not None else w["start"]
+                seg_start = prev_split if prev_split is not None else w_start_m
                 segments.append((seg_start, td["merge_pos"], False, b["id"]))
                 segments.append((td["merge_pos"], td["split_pos"], True, b["id"]))
                 prev_split = td["split_pos"]
             # Final segment: last split -> wire end
-            last_start = prev_split if prev_split is not None else w["start"]
-            segments.append((last_start, w["end"], False, None))
+            last_start = prev_split if prev_split is not None else w_start_m
+            segments.append((last_start, w_end_m, False, None))
 
             # Route each non-trunk segment, collect results.
             full_poly = []
@@ -410,7 +456,7 @@ class RouterSession:
                         scene_ops.author_tube(
                             stage,
                             f"{scene_ops.ROUTES_SCOPE}/{wire_name}_seg{seg_idx}",
-                            poly, od_m, color)
+                            self._scaled(poly, inv), od_m * inv, color)
 
             if not failed and wire_name not in already_added:
                 total_trunk_len = sum(trunk_data[b["id"]]["len"]

@@ -8,9 +8,16 @@ from . import scene_ops
 
 SAMPLE_ROOT = "/World/Sample"
 
-# Overall size of the sample bay (world units). Bump this to make it bigger.
+# Author in Omniverse-native CENTIMETRES (metersPerUnit = 0.01) so imported cm assets
+# compose 1:1 in the viewport. SCALE / COMPLEX_SCALE are physical sizes in METRES; _M2U
+# converts metres -> stage units (cm). The routing pipeline reads metersPerUnit and
+# converts back to metres for the solver, so nothing downstream changes.
+METERS_PER_UNIT = 0.01
+_M2U = 1.0 / METERS_PER_UNIT  # 100 stage units per metre
+
+# Overall size of the sample bay (physical metres). Bump this to make it bigger.
 SCALE = 4.0
-MARKER_RADIUS = 0.02 * SCALE  # draggable markers, sized to the scene (small)
+MARKER_RADIUS = 0.02 * SCALE * _M2U  # draggable markers, sized to the scene (small)
 
 # Base (unit) layout, scaled by SCALE on build. Each descriptor: name (unique route
 # id), wire-type id, and world endpoints.
@@ -22,7 +29,7 @@ SAMPLE_WIRES = [
 
 
 def _s(t):
-    return tuple(float(v) * SCALE for v in t)
+    return tuple(float(v) * SCALE * _M2U for v in t)
 
 
 def _clear(stage, path):
@@ -39,6 +46,11 @@ def build_sample_scene(stage):
         _clear(stage, p)
 
     UsdGeom.Xform.Define(stage, "/World")
+    # Centimetres — Omniverse's native unit — so imported cm assets line up 1:1.
+    # Geometry is authored at SCALE metres * 100 units/m; the routing pipeline reads
+    # this metersPerUnit and converts back to metres for the solver.
+    UsdGeom.SetStageMetersPerUnit(stage, METERS_PER_UNIT)
+    UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.y)
     UsdGeom.Scope.Define(stage, SAMPLE_ROOT)
 
     box = scene_ops.author_box_mesh
@@ -120,19 +132,22 @@ def build_complex_scene(stage):
         _clear(stage, p)
 
     UsdGeom.Xform.Define(stage, "/World")
+    # Centimetres (see build_sample_scene) — native Omniverse unit.
+    UsdGeom.SetStageMetersPerUnit(stage, METERS_PER_UNIT)
+    UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.y)
     UsdGeom.Scope.Define(stage, SAMPLE_ROOT)
 
     s = COMPLEX_SCALE
 
     def sc(t):
-        return tuple(float(v) * s for v in t)
+        return tuple(float(v) * s * _M2U for v in t)
 
     for name, center, size, color, temp_c, em in COMPLEX_BOXES:
         mesh = scene_ops.author_box_mesh(stage, f"{SAMPLE_ROOT}/{name}", sc(center), sc(size), color)
         if temp_c is not None or em is not None:
             scene_ops.write_tags(mesh.GetPrim(), temp_c=temp_c, em=em)
 
-    radius = 0.02 * s
+    radius = 0.02 * s * _M2U
     out = []
     for name, type_id, start, end in COMPLEX_WIRES:
         ws, we = sc(start), sc(end)
