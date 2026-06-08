@@ -81,6 +81,7 @@ class PipeRouterPanel:
         self._need_tags = False
         self._need_bom = False
         self._need_bundles = False
+        self._need_resync = False   # re-sync panel to stage (markers deleted / scene swapped)
         self._bundles = []
         self._bundle_counter = 0
         self._selected_bundle = None   # index into self._bundles, or None
@@ -140,13 +141,16 @@ class PipeRouterPanel:
 
     def _on_objects_changed(self, notice, sender):
         # coalesced (one rebuild next frame); rebuilding only reads the stage, so it
-        # cannot re-trigger this notice
-        self._schedule(tags=True)
+        # cannot re-trigger this notice. resync drops wires/bundles whose markers the
+        # user just deleted in the viewport.
+        self._schedule(tags=True, resync=True)
 
     def _on_stage_event(self, e):
         if e.type == int(omni.usd.StageEventType.OPENED):
             self._register_stage_listener()   # re-bind to the new stage
-            self._schedule(tags=True)
+            # a new/different scene invalidates wires tied to the old stage's markers;
+            # resync empties the panel to match (Load re-populates after, with its markers).
+            self._schedule(tags=True, resync=True)
 
     def _section_views(self):
         self._views_frame = ui.CollapsableFrame("Cross-sections + cameras", collapsed=True)
@@ -185,6 +189,12 @@ class PipeRouterPanel:
                     ui.Button("Export .usdz...", clicked_fn=self._on_export_usdz, height=28,
                               tooltip="Export the session to a single compressed .usdz "
                                       "archive for sharing / handoff.")
+                ui.Button("Reset (clear wires + markers, keep scene)",
+                          clicked_fn=self._on_reset, height=26,
+                          style={"background_color": 0xFF223344},
+                          tooltip="Remove all wires, bundles, markers and routed tubes and "
+                                  "start fresh. Obstacle meshes are kept. The panel also "
+                                  "auto-clears when you open a new scene or delete markers.")
                 with ui.HStack(height=0):
                     ui.Label("Grid resolution", width=110)
                     self._res = ui.IntField()
@@ -635,12 +645,13 @@ class PipeRouterPanel:
     # callback ("Container::clear was called during an event or draw"). So event
     # handlers request a refresh and we rebuild on the next frame instead.
     def _schedule(self, wires=False, inspector=False, tags=False, bom=False,
-                  bundles=False):
+                  bundles=False, resync=False):
         self._need_wires = self._need_wires or wires
         self._need_inspector = self._need_inspector or inspector
         self._need_tags = self._need_tags or tags
         self._need_bom = self._need_bom or bom
         self._need_bundles = self._need_bundles or bundles
+        self._need_resync = self._need_resync or resync
         if self._refresh_pending:
             return
         self._refresh_pending = True
@@ -652,6 +663,11 @@ class PipeRouterPanel:
         except Exception:
             pass
         self._refresh_pending = False
+        if self._need_resync:
+            self._need_resync = False
+            if self._prune_missing():   # markers vanished -> drop those wires/bundles
+                self._need_wires = self._need_bundles = True
+                self._need_inspector = self._need_bom = True
         if self._need_wires:
             self._need_wires = False
             self._rebuild_wires()
@@ -670,6 +686,64 @@ class PipeRouterPanel:
         # viewport order labels + HUD refreshed every coalesced frame
         self._refresh_vp_labels()
         self._refresh_hud()
+
+    def _prune_missing(self):
+        """Drop any wire/bundle whose markers no longer exist in the stage — covers the
+        user deleting a marker in the viewport AND opening a new/different scene (where all
+        the old markers are gone, so the panel empties to match). Returns True if anything
+        was removed. Only edits the panel model; it never deletes stage prims."""
+        stage = self._get_stage()
+        if stage is None:
+            return False
+
+        def _has(path):
+            p = stage.GetPrimAtPath(path)
+            return bool(p and p.IsValid())
+
+        m = scene_ops.MARKERS_SCOPE
+        kept_w = [w for w in self._wires
+                  if _has(f"{m}/{w['key']}_start") and _has(f"{m}/{w['key']}_end")]
+        kept_b = [b for b in self._bundles
+                  if _has(b.get("merge_marker", "")) and _has(b.get("split_marker", ""))]
+        changed = (len(kept_w) != len(self._wires)) or (len(kept_b) != len(self._bundles))
+        if not changed:
+            return False
+
+        names = {w["name"] for w in kept_w}
+        for b in kept_b:                       # forget members that were pruned
+            b["members"] = [mm for mm in b.get("members", []) if mm in names]
+        self._wires, self._bundles = kept_w, kept_b
+        self._selected = None
+        self._selected_bundle = None
+        self._active_debug = None
+        self._last_bom = [r for r in getattr(self, "_last_bom", []) if r.get("wire_id") in names]
+        return True
+
+    def _on_reset(self):
+        """Clear ALL routing state — wires, bundles, selection — and remove the markers,
+        route tubes and debug geometry PipeRouter authored. Obstacle meshes (the user's
+        scene) are left untouched, so you can immediately start adding wires again."""
+        stage = self._get_stage()
+        self._wires = []
+        self._bundles = []
+        self._selected = None
+        self._selected_bundle = None
+        self._active_debug = None
+        self._key_counter = 0
+        self._bundle_counter = 0
+        self._last_bom = []
+        if stage is not None:
+            for scope in (scene_ops.MARKERS_SCOPE, scene_ops.ROUTES_SCOPE,
+                          scene_ops.DEBUG_SCOPE):
+                p = stage.GetPrimAtPath(scope)
+                if p and p.IsValid():
+                    stage.RemovePrim(p.GetPath())
+        self._schedule(wires=True, bundles=True, inspector=True, bom=True, tags=True)
+        self._refresh_views()
+        self._refresh_overlay()
+        self._refresh_hud()
+        self._refresh_vp_labels()
+        self._progress.text = "Reset — cleared wires, bundles, markers and routes (obstacles kept)."
 
     # ----------------------------------------------------------------- wires
     def _new_wire(self, key, name, type_index=0):
@@ -812,6 +886,10 @@ class PipeRouterPanel:
                 })
 
         self._schedule(wires=True, bundles=True, inspector=True, bom=True, tags=True)
+        # We just authoritatively set the model from the loaded file — cancel any resync
+        # queued by the stage-OPENED event so it can't prune the fresh wires while the
+        # stage is still composing.
+        self._need_resync = False
         self._refresh_views()
         self._refresh_overlay()
         self._refresh_hud()
