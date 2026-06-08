@@ -284,10 +284,11 @@ class PipeRouterPanel:
         inv = self._stage_inv(stage)  # meters -> stage units (cm/mm/m agnostic)
         merge_path = f"{scene_ops.MARKERS_SCOPE}/{bid}_merge"
         split_path = f"{scene_ops.MARKERS_SCOPE}/{bid}_split"
+        r = self._marker_radius(stage)   # scene-relative marker size
         scene_ops.spawn_waypoint_marker(stage, merge_path, (0.3 * inv, 0.3 * inv, 0.3 * inv),
-                                         color=self._BUNDLE_START_COLOR, radius=0.045 * inv)
+                                         color=self._BUNDLE_START_COLOR, radius=r)
         scene_ops.spawn_waypoint_marker(stage, split_path, (0.8 * inv, 0.3 * inv, 0.3 * inv),
-                                         color=self._BUNDLE_END_COLOR, radius=0.045 * inv)
+                                         color=self._BUNDLE_END_COLOR, radius=r)
         default_type_id = self._bundle_type_ids[0] if self._bundle_type_ids else ""
         self._bundles.append({
             "id": bid, "name": bid, "kind": "wire",
@@ -805,18 +806,39 @@ class PipeRouterPanel:
         except Exception:
             return 1.0
 
+    def _scene_diag(self, stage):
+        """Bounding-box diagonal of the obstacle geometry, in STAGE units. Falls back to
+        ~1 m worth of stage units when there's no geometry yet (empty scene)."""
+        try:
+            prims = scene_ops.list_collidable_meshes(stage)
+            b = scene_ops.compute_bounds(stage, prims) if prims else None
+            if b is not None:
+                d = b[1] - b[0]
+                return float((float(d[0]) ** 2 + float(d[1]) ** 2 + float(d[2]) ** 2) ** 0.5)
+        except Exception:
+            pass
+        return float(self._stage_inv(stage))   # ~1 m
+
+    def _marker_radius(self, stage):
+        """Draggable-marker radius in STAGE units, ~0.4%% of the scene diagonal, clamped to
+        a visible-but-not-huge physical range (5-50 mm). Scales markers to the asset so they
+        neither dwarf a 1 m harness nor vanish on a big bay."""
+        inv = self._stage_inv(stage)
+        return float(min(max(self._scene_diag(stage) * 0.004, 0.005 * inv), 0.05 * inv))
+
     def _add_wire(self):
         stage = self._get_stage()
         if stage is None:
             self._progress.text = "open a USD stage first"
             return
         inv = self._stage_inv(stage)  # meters -> stage units, so the wire is ~0.5 m anywhere
+        r = self._marker_radius(stage)   # scene-relative marker size
         key = f"wire_{self._key_counter}"
         self._key_counter += 1
         scene_ops.spawn_marker(stage, f"{scene_ops.MARKERS_SCOPE}/{key}_start",
-                               (0.0, 0.0, 0.0), color=(0.1, 0.9, 0.1), radius=0.035 * inv)
+                               (0.0, 0.0, 0.0), color=(0.1, 0.9, 0.1), radius=r)
         scene_ops.spawn_marker(stage, f"{scene_ops.MARKERS_SCOPE}/{key}_end",
-                               (0.5 * inv, 0.0, 0.0), color=(0.9, 0.1, 0.1), radius=0.035 * inv)
+                               (0.5 * inv, 0.0, 0.0), color=(0.9, 0.1, 0.1), radius=r)
         self._wires.append(self._new_wire(key, key))
         self._schedule(wires=True)
 
@@ -1459,7 +1481,7 @@ class PipeRouterPanel:
         pos = (float(start[0]) + 0.3 * inv, float(start[1]), float(start[2])) if start is not None \
             else (0.25 * inv, 0.0, 0.0)
         scene_ops.spawn_waypoint_marker(stage, path, pos, color=(0.1, 0.5, 0.9),
-                                         radius=0.05 * inv)
+                                         radius=self._marker_radius(stage) * 1.2)
         w["waypoints"].append(path)
         # new waypoint lands in the last gap (after all the wire's bundles, before end);
         # the user drags it earlier in the itinerary if they want.

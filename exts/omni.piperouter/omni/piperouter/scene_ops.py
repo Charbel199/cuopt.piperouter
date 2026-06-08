@@ -320,13 +320,14 @@ def author_raw_path(stage, wire_name, raw_polyline, color=(0.8, 0.8, 0.0), width
 
 
 def author_bend_heatmap(stage, wire_name, polyline, min_bend_radius_mm, cap=5_000,
-                         pos_scale=1.0):
+                         pos_scale=1.0, width=None):
     """BasisCurves coloured green/yellow/red by local curvature:
        green = radius > 1.5× min_bend, yellow = 0.5-1.5×, red = below limit.
 
     The polyline is in METERS (solver space) so the curvature physics is correct;
     pos_scale converts the AUTHORED point positions back to stage units (1/metersPerUnit)
-    without disturbing the radius computation."""
+    without disturbing the radius computation. width (STAGE units) sets the tube thickness —
+    pass the wire's real display diameter so the heatmap is to-scale (default ~legacy)."""
     import numpy as np
     pts = [np.asarray(p, dtype=np.float64) for p in polyline]
     if len(pts) < 3:
@@ -390,7 +391,8 @@ def author_bend_heatmap(stage, wire_name, polyline, min_bend_radius_mm, cap=5_00
     crv.GetPointsAttr().Set(gf_pts)
     crv.GetCurveVertexCountsAttr().Set([len(gf_pts)])
     crv.GetTypeAttr().Set(UsdGeom.Tokens.linear)
-    crv.GetWidthsAttr().Set([0.03 * ps] * len(gf_pts))
+    w = float(width) if width is not None else 0.03 * ps
+    crv.GetWidthsAttr().Set([w] * len(gf_pts))
     crv.SetWidthsInterpolation(UsdGeom.Tokens.vertex)
     crv.GetDisplayColorAttr().Set(gf_cols)
     crv.GetDisplayColorPrimvar().SetInterpolation(UsdGeom.Tokens.vertex)

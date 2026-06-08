@@ -70,6 +70,14 @@ class RouterSession:
         n = float(np.linalg.norm(d))
         return [float(x) for x in (d / n)] if n > 1e-9 else None
 
+    def _display_diameter_m(self, real_diameter_m):
+        """Tube display diameter (m) = the wire/pipe's TRUE physical gauge. The scene is at
+        real scale, so we draw real thickness (a 1.3 mm wire is 1.3 mm, a 16 mm hose is
+        16 mm) — accurate and type-distinct. The tiny floor only avoids a zero/degenerate
+        tube (e.g. bundle types whose real thickness comes from the bundle-diameter
+        formula, not a fixed gauge)."""
+        return max(float(real_diameter_m), 0.0005)   # 0.5 mm guard against zero only
+
     def compute_grids(self, stage, resolution=64, pad_frac=0.05, clearance_m=0.0):
         """Read the stage and build the four voxel grids (occupancy, surface distance,
         thermal, EM) IN MEMORY. The safety clearance is BAKED INTO the occupancy here
@@ -202,7 +210,7 @@ class RouterSession:
                             "length_m": 0.0, "cost": 0.0, "mass": 0.0,
                             "reason": res.get("reason", "")})
                 continue
-            diameter = max(float(spec["outer_diameter_mm"]) / 1000.0, MIN_DISPLAY_DIAMETER_M)
+            diameter = self._display_diameter_m(float(spec["outer_diameter_mm"]) / 1000.0)
             color = spec.get("color", (0.8, 0.1, 0.1))
             # solver polyline is meters -> back to stage units for authoring
             scene_ops.author_tube(
@@ -261,7 +269,7 @@ class RouterSession:
         if existing and existing.IsValid():
             stage.RemovePrim(existing.GetPath())
         if res["status"] == "routed":
-            diameter = max(float(spec["outer_diameter_mm"]) / 1000.0, MIN_DISPLAY_DIAMETER_M)
+            diameter = self._display_diameter_m(float(spec["outer_diameter_mm"]) / 1000.0)
             scene_ops.author_tube(stage, path, self._scaled(res["polyline"], inv),
                                   diameter * inv, spec.get("color", (0.8, 0.1, 0.1)))
             length = float(res["length_m"])
@@ -389,8 +397,7 @@ class RouterSession:
 
             trunk_poly = trunk_res["polyline"]
             trunk_len = float(trunk_res["length_m"])
-            trunk_od_m = max(float(ts["outer_diameter_mm"]) / 1000.0,
-                             MIN_DISPLAY_DIAMETER_M)
+            trunk_od_m = self._display_diameter_m(float(ts["outer_diameter_mm"]) / 1000.0)
             scene_ops.author_tube(
                 stage, f"{scene_ops.ROUTES_SCOPE}/bundle_{bid}_trunk",
                 self._scaled(trunk_poly, inv), trunk_od_m * inv, tuple(ts["color"]))
@@ -433,8 +440,7 @@ class RouterSession:
             spec = dict(w["spec"])
             weights = dict(w.get("weights", {}))
             wconn = w.get("connectivity", 18)
-            od_m = max(float(spec["outer_diameter_mm"]) / 1000.0,
-                       MIN_DISPLAY_DIAMETER_M)
+            od_m = self._display_diameter_m(float(spec["outer_diameter_mm"]) / 1000.0)
             color = spec.get("color", (0.8, 0.1, 0.1))
 
             # wire endpoints stage units -> meters (trunk merge/split already meters)

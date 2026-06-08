@@ -348,6 +348,10 @@ class PipeRouterExtension(omni.ext.IExt):
             # The grids/polylines are in METERS (solver space); convert lengths back
             # to stage units when authoring debug geometry so it lines up with the USD.
             inv = 1.0 / float(getattr(s, "mpu", 1.0) or 1.0)
+            # the cable-representing debug curves use the wire's REAL diameter (same as the
+            # routed tube), so the debug view is to-scale rather than a fixed fat line.
+            _real_d = float(spec.get("outer_diameter_mm", 1.5)) / 1000.0
+            dia_stage = (s._display_diameter_m(_real_d) if s else max(_real_d, 5e-4)) * inv
 
             if mode == "cells":
                 cells = wire.get("cells", [])
@@ -365,13 +369,14 @@ class PipeRouterExtension(omni.ext.IExt):
                     return "[piperouter] raw_path: no raw polyline (route first)"
                 poly = wire.get("polyline", [])
                 raw_s = (np.asarray(raw, dtype=np.float64) * inv).tolist()
+                # raw stair-step a bit thinner than the cable so the smooth tube reads over it
                 scene_ops.author_raw_path(stage, wire_name + "_raw", raw_s,
-                                          color=(0.9, 0.9, 0.1), width=0.02 * inv)
+                                          color=(0.9, 0.9, 0.1), width=dia_stage * 0.5)
                 if poly and len(poly) >= 2:
                     poly_s = (np.asarray(poly, dtype=np.float64) * inv).tolist()
                     scene_ops.author_tube(stage,
                                           f"{scene_ops.DEBUG_SCOPE}/smooth_{wire_name}",
-                                          poly_s, 0.025 * inv, color)
+                                          poly_s, dia_stage, color)
                 carb.log_info(f"[piperouter] wire debug 'raw_path': {len(raw)} raw pts, {len(poly)} smooth pts")
 
             elif mode == "cost_terrain":
@@ -416,7 +421,7 @@ class PipeRouterExtension(omni.ext.IExt):
                     return "[piperouter] bend_radius: route first"
                 min_bend = float(spec.get("min_bend_radius_mm", 50.0))
                 scene_ops.author_bend_heatmap(stage, wire_name, poly, min_bend,
-                                              pos_scale=inv)
+                                              pos_scale=inv, width=dia_stage)
                 carb.log_info(f"[piperouter] wire debug 'bend_radius': min={min_bend}mm")
 
             return None
