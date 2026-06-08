@@ -29,6 +29,26 @@ def test_every_global_planner_routes_around_a_wall_collision_free(empty_stack):
         assert np.linalg.norm(np.subtract(cells[-1], b)) <= 3  # ends near goal
 
 
+def _path_len(cells, cell_size):
+    p = [np.asarray(c, dtype=float) for c in cells]
+    return cell_size * sum(float(np.linalg.norm(b - a)) for a, b in zip(p[:-1], p[1:]))
+
+
+def test_octree_lattice_matches_lattice(empty_stack):
+    # the corridor (octree) + banded lattice must produce a route of essentially the same
+    # length as the full lattice (it runs the same lattice, just restricted to a band).
+    s = empty_stack
+    s.occupancy[5, :8, :] = 1
+    wire = _wire()
+    weights = {"surface": 1.0, "bend": 1.0}
+    a, b = (0, 5, 1), (9, 5, 1)
+    lat = planners.LatticeGlobal().plan(s, wire, weights, 26, a, b, None, 0.0, None, None)
+    olt = planners.OctreeLatticeGlobal().plan(s, wire, weights, 26, a, b, None, 0.0, None, None)
+    assert lat and olt
+    cs = s.frame.cell_size
+    assert abs(_path_len(olt, cs) - _path_len(lat, cs)) < 3 * cs   # within a few cells
+
+
 def test_rrt_is_deterministic(empty_stack):
     s = empty_stack
     s.occupancy[5, :8, :] = 1

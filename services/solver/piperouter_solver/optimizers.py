@@ -11,9 +11,13 @@ Signature: optimize(polyline, frame, blocked, wire, start_heading, end_heading,
 """
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 
 from . import smoothing
+
+_log = logging.getLogger("piperouter")
 
 
 def _is_free(frame, blocked, p):
@@ -151,5 +155,10 @@ LOCAL_OPTIMIZERS = {
 
 
 def make_local(name):
-    cls = LOCAL_OPTIMIZERS.get(name, FibreLocal)
+    cls = LOCAL_OPTIMIZERS.get(name)
+    if cls is None:
+        _log.warning("[piperouter] unknown local optimizer %r (have: %s) -> using 'fibre'. "
+                     "Rebuild/restart the solver if you expected this optimizer.",
+                     name, ", ".join(LOCAL_OPTIMIZERS))
+        cls = FibreLocal
     return cls()

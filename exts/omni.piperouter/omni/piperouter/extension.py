@@ -126,11 +126,15 @@ class PipeRouterExtension(omni.ext.IExt):
                 import omni.kit.commands
                 omni.usd.get_context().get_selection().set_selected_prim_paths(
                     ["/World"], True)
-                # Try several command names used in different Kit versions
+                # Try several command names used in different Kit versions. Check the
+                # command is REGISTERED first — calling execute() on an unknown command
+                # makes the command subsystem log a noisy [Error] even when we catch it.
                 for cmd in ("FrameViewportSelection",
                             "FocusViewport",
                             "ViewportFrameSelection"):
                     try:
+                        if omni.kit.commands.get_command_class(cmd) is None:
+                            continue   # not in this Kit build -> skip silently
                         omni.kit.commands.execute(cmd)
                         carb.log_info(f"[piperouter] framed scene via command '{cmd}'")
                         omni.usd.get_context().get_selection().clear_selected_prim_paths()
@@ -173,10 +177,13 @@ class PipeRouterExtension(omni.ext.IExt):
             carb.log_info(f"[piperouter] Route All: {len(wires)} wire(s) at resolution "
                           f"{resolution}, safety clearance {clr} m, "
                           f"algo {global_planner}/{local_optimizer}")
+            import time as _t
+            t0 = _t.perf_counter()
             s = self._ensure_session(url)
             s.global_planner, s.local_optimizer = global_planner, local_optimizer
             clr = wires[0].get("clearance_m", 0.0) if wires else 0.0
             self._voxelize(resolution, url, clearance_m=clr)   # bakes clearance into the grid
+            t_vox = _t.perf_counter()
             cell = s.last_grids[1] if getattr(s, "last_grids", None) else None
             self._clearance_note = None
             if cell:
@@ -188,9 +195,12 @@ class PipeRouterExtension(omni.ext.IExt):
                                             f"{cell * 1000:.0f}mm -> ignored; raise resolution")
                     carb.log_warn(f"[piperouter] {self._clearance_note}")
             results, bom = s.route_all(self._get_stage(), self._sid, wires)
+            t_end = _t.perf_counter()
             routed = sum(1 for r in results if r["status"] == "routed")
-            carb.log_info(f"[piperouter] Route All done: {routed}/{len(results)} routed, "
-                          f"{len(results) - routed} no-path")
+            carb.log_info(
+                f"[piperouter] Route All done: {routed}/{len(results)} routed, "
+                f"{len(results) - routed} no-path | TIMING voxelize {(t_vox - t0) * 1e3:.0f}ms "
+                f"+ route {(t_end - t_vox) * 1e3:.0f}ms = {(t_end - t0) * 1e3:.0f}ms total")
             return results, bom, None
         except Exception as exc:
             carb.log_error(f"[piperouter] route_all failed: {exc}")

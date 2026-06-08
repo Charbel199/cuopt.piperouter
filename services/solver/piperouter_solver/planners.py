@@ -11,12 +11,15 @@ occupancy by the wire radius + clearance and removing over-temperature (melt) ce
 from __future__ import annotations
 
 import heapq
+import logging
 
 import numpy as np
 
 from . import fields
 from .backend import shortest_path
 from .lattice import ExpandedLatticeBuilder
+
+_log = logging.getLogger("piperouter")
 
 
 def blocked_mask(stack, wire, clearance_m, extra_obstacles):
@@ -482,6 +485,49 @@ class MedialGlobal(_GridPlannerBase):
         return None
 
 
+class OctreeLatticeGlobal(_GridPlannerBase):
+    """Hierarchical octree + heading lattice. The octree finds a cheap coarse corridor;
+    then the FULL bend-aware lattice runs only in a band of fine cells around that corridor
+    (cells outside the band are masked as obstacles, so the lattice expands a fraction of
+    the volume — ~10x fewer nodes at high res). This keeps the lattice's min-bend / gentle
+    routing exactly, while the octree prunes the open-air search. Falls back to the full
+    lattice if the band is too tight, so it is never worse than `lattice` on coverage."""
+    name = "octree_lattice"
+
+    def __init__(self, band_cells=4):
+        self.band = int(band_cells)
+        self._oct = OctreeGlobal()
+        self._lat = LatticeGlobal()
+
+    def plan(self, stack, wire, weights, connectivity, start_cell, goal_cell,
+             extra_obstacles, clearance_m, start_heading, goal_heading):
+        coarse = self._oct.plan(stack, wire, weights, connectivity, start_cell, goal_cell,
+                                extra_obstacles, clearance_m, None, None)
+        if coarse:
+            nx, ny, nz = stack.occupancy.shape
+            band = np.zeros((nx, ny, nz), dtype=bool)
+            r = self.band
+            pts = list(coarse) + [tuple(int(v) for v in start_cell),
+                                  tuple(int(v) for v in goal_cell)]
+            for ci, cj, ck in pts:                       # dilate the corridor into a band
+                band[max(0, ci - r):min(nx, ci + r + 1),
+                     max(0, cj - r):min(ny, cj + r + 1),
+                     max(0, ck - r):min(nz, ck + r + 1)] = True
+            outside = ~band
+            if extra_obstacles is not None:
+                outside = outside | np.asarray(extra_obstacles, dtype=bool)
+            # lattice restricted to the band: cells outside become obstacles, so the
+            # expanded graph only covers the corridor.
+            cells = self._lat.plan(stack, wire, weights, connectivity, start_cell,
+                                   goal_cell, outside, clearance_m,
+                                   start_heading, goal_heading)
+            if cells is not None:
+                return cells
+        # band too tight (or no corridor) -> full lattice; never worse than plain lattice
+        return self._lat.plan(stack, wire, weights, connectivity, start_cell, goal_cell,
+                              extra_obstacles, clearance_m, start_heading, goal_heading)
+
+
 GLOBAL_PLANNERS = {
     "lattice": LatticeGlobal,
     "astar": AStarGlobal,
@@ -489,9 +535,15 @@ GLOBAL_PLANNERS = {
     "rrt": RRTGlobal,
     "octree": OctreeGlobal,
     "medial": MedialGlobal,
+    "octree_lattice": OctreeLatticeGlobal,
 }
 
 
 def make_global(name):
-    cls = GLOBAL_PLANNERS.get(name, LatticeGlobal)
+    cls = GLOBAL_PLANNERS.get(name)
+    if cls is None:
+        _log.warning("[piperouter] unknown global planner %r (have: %s) -> using 'lattice'. "
+                     "Rebuild/restart the solver if you expected this planner.",
+                     name, ", ".join(GLOBAL_PLANNERS))
+        cls = LatticeGlobal
     return cls()

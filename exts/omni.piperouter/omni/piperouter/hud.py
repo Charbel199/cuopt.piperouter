@@ -30,6 +30,7 @@ class ViewportHUD:
     def __init__(self):
         self._frame = None
         self._visible = True
+        self._warned_draw = False  # warn once on draw failure (else it spams per frame)
 
     # ------------------------------------------------------------------
     def _ensure_frame(self):
@@ -66,7 +67,9 @@ class ViewportHUD:
             with self._frame:
                 self._build(ui, stats, selected_wire)
         except Exception as exc:
-            carb.log_warn(f"[piperouter] HUD draw failed: {exc}")
+            if not self._warned_draw:
+                self._warned_draw = True
+                carb.log_warn(f"[piperouter] HUD draw failed (silencing further): {exc}")
 
     def _build(self, ui, stats, wire):
         # Push to bottom-right corner

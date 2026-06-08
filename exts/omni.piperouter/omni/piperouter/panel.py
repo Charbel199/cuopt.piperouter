@@ -29,7 +29,7 @@ _WEIGHTS = ("surface", "bend", "thermal", "em", "smoothing")
 # The _ALGOS tuples are the VALUES sent to the solver; the _LABELS are what the combo
 # shows — everything except the production defaults (lattice / fibre) is tagged
 # "(experimental)" so an engineer knows which pair is the supported one.
-_GLOBAL_ALGOS = ("lattice", "astar", "fmm", "rrt", "octree", "medial")
+_GLOBAL_ALGOS = ("lattice", "astar", "fmm", "rrt", "octree", "medial", "octree_lattice")
 _LOCAL_ALGOS = ("fibre", "none", "trajopt", "elastic_rod")
 _GLOBAL_LABELS = tuple(n if n == "lattice" else f"{n} (experimental)" for n in _GLOBAL_ALGOS)
 _LOCAL_LABELS = tuple(n if n in ("fibre", "none") else f"{n} (experimental)" for n in _LOCAL_ALGOS)

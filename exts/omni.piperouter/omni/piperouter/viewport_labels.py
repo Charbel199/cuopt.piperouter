@@ -27,6 +27,7 @@ class ViewportOrderLabels:
         self._frame = None
         self._vp_api = None
         self._items = []  # list of (world_pos (3,), text, color_abgr)
+        self._warned_draw = False  # only warn once on draw failure (else it spams per frame)
 
     def _ensure_overlay(self):
         """Lazily create the SceneView bound to the active viewport. Returns True
@@ -74,7 +75,10 @@ class ViewportOrderLabels:
                         sc.Label(str(text), alignment=ui.Alignment.CENTER,
                                  color=int(color), size=_LABEL_SIZE)
         except Exception as exc:  # noqa: BLE001
-            carb.log_warn(f"[piperouter] viewport order-label draw failed: {exc}")
+            if not self._warned_draw:
+                self._warned_draw = True
+                carb.log_warn(f"[piperouter] viewport order-label draw failed (silencing "
+                              f"further): {exc}")
 
     def clear(self):
         self.update([])

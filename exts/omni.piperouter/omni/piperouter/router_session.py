@@ -104,9 +104,11 @@ class RouterSession:
         bmin, bmax = bmin - pad, bmax + pad
 
         gbmin, cell, res = grid_io.frame_from_bounds(bmin, bmax, resolution)
+        t_setup = time.perf_counter()
         pts, idx = voxelizer.collect_meshes(stage, prims)
         pts = np.asarray(pts, dtype=np.float32) * mpu     # stage units -> meters
         occ, sd = voxelizer.voxelize(pts, idx, gbmin, cell, res)
+        t_vox = time.perf_counter()
 
         # BAKE the safety clearance into the occupancy: grow prohibited voxels by
         # round(clearance/cell). This IS the keep-out the router avoids and the views
@@ -129,6 +131,7 @@ class RouterSession:
                       for (c, t, e, char) in tags if e is not None]
         thermal = fields.thermal_field(gbmin, cell, res, thermal_sources)
         em = fields.em_field(gbmin, cell, res, em_sources)
+        t_fields = time.perf_counter()
 
         self.last_stats = {
             "res": tuple(int(v) for v in res),
@@ -137,13 +140,15 @@ class RouterSession:
             "n_thermal_sources": len(thermal_sources),
             "n_em_sources": len(em_sources),
             "thermal_max_c": float(thermal.max()),
-            "seconds": round(time.perf_counter() - t0, 2),
+            "seconds": round(t_fields - t0, 2),
         }
-        log.info("[piperouter] voxelized %s cells (%d occupied), %d thermal / %d EM "
-                 "sources, max %.0f°C, %.2fs",
+        # per-step timing breakdown so it's clear where voxelization time goes
+        log.info("[piperouter] voxelize %s = %d occ | %d meshes/%d tris | "
+                 "TIMING setup %.0fms + voxelize(GPU) %.0fms + fields %.0fms = %.0fms total",
                  self.last_stats["res"], self.last_stats["occupied"],
-                 len(thermal_sources), len(em_sources),
-                 self.last_stats["thermal_max_c"], self.last_stats["seconds"])
+                 len(prims), len(idx) // 3,
+                 (t_setup - t0) * 1e3, (t_vox - t_setup) * 1e3,
+                 (t_fields - t_vox) * 1e3, (t_fields - t0) * 1e3)
         return gbmin, cell, res, occ, sd, thermal, em
 
     def voxelize_scene(self, stage, session_id, resolution=64, pad_frac=0.05, clearance_m=0.0):
@@ -151,7 +156,9 @@ class RouterSession:
             stage, resolution, pad_frac, clearance_m=clearance_m)
         path = self.grid_dir / session_id / "stack.npz"
         path.parent.mkdir(parents=True, exist_ok=True)
+        t_save = time.perf_counter()
         grid_io.save_grids(path, gbmin, cell, res, occ, sd, thermal, em)
+        log.info("[piperouter] grid handoff saved in %.0fms", (time.perf_counter() - t_save) * 1e3)
         self.frame = (gbmin, cell, res)
         self.last_grids = (gbmin, cell, res, occ, sd, thermal, em)  # + sd for debug views
         return session_id
@@ -180,7 +187,9 @@ class RouterSession:
                 "local_optimizer": self.local_optimizer,
             })
 
+        t_solve = time.perf_counter()
         resp = self.client.solve_all(session_id, routes)
+        t_done = time.perf_counter()
         by_name = {w["name"]: w for w in wires}
 
         scene_ops.clear_routes(stage)
@@ -205,6 +214,12 @@ class RouterSession:
                 "cost": length * float(spec.get("cost_per_m", 0.0)),
                 "mass": length * float(spec.get("mass_per_m_kg", 0.0)),
             })
+        n_routed = sum(1 for r in resp["results"] if r["status"] == "routed")
+        log.info("[piperouter] route_all (%s/%s): solve(GPU/HTTP) %.0fms + author %.0fms "
+                 "= %.0fms for %d wires (%d routed)",
+                 self.global_planner, self.local_optimizer,
+                 (t_done - t_solve) * 1e3, (time.perf_counter() - t_done) * 1e3,
+                 (time.perf_counter() - t_solve) * 1e3, len(wires), n_routed)
         return resp["results"], bom
 
     def refine_wire(self, stage, session_id, wire, locked_wires):
