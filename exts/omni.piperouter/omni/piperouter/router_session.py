@@ -327,11 +327,18 @@ class RouterSession:
             ts = bundle_lib.trunk_spec(member_specs, bid)
             conn = member_wires[0].get("connectivity", 18)
             trunk_weights = dict(b.get("weights", {}))
+            # Resolve the bundle's trunk waypoints (stage marker paths) to world
+            # positions and convert to meters, so the shared trunk passes through them.
+            trunk_wps = []
+            for wp_path in b.get("waypoints", []):
+                wp = scene_ops.get_world_pos(stage, wp_path)
+                if wp is not None:
+                    trunk_wps.append([float(x) for x in (np.asarray(wp) * mpu)])
             trunk_route = {
                 "wire": ts,
                 "start": [float(x) for x in merge_pos],
                 "end": [float(x) for x in split_pos],
-                "waypoints": [], "weights": trunk_weights,
+                "waypoints": trunk_wps, "weights": trunk_weights,
                 "connectivity": conn, "priority": 0, "clearance_m": 0.0,
             }
             trunk_res = self.client.solve(session_id, trunk_route)
@@ -402,26 +409,37 @@ class RouterSession:
             w_start_m = self._scaled([w["start"]], mpu)[0]
             w_end_m = self._scaled([w["end"]], mpu)[0]
 
-            # Build the ordered list of (from_pos, to_pos, is_trunk, bundle_id)
-            # for this wire across all its bundles. All positions in METERS.
-            segments = []          # (from, to, is_trunk, bid)
+            # This wire's own waypoints, bucketed by slot (how many of its bundles come
+            # before them). gaps[s] = waypoints to visit in the s-th gap; gaps[K] is the
+            # final stretch to the wire end. All positions in METERS.
+            K = len(wire_bundle_list)
+            wp_m = self._scaled(w.get("waypoints", []), mpu)
+            wp_slots = w.get("waypoint_slots", [])
+            gaps = [[] for _ in range(K + 1)]
+            for wi_, pos in enumerate(wp_m):
+                s = wp_slots[wi_] if wi_ < len(wp_slots) else 0
+                gaps[min(max(int(s), 0), K)].append([float(x) for x in pos])
+
+            # Build the ordered list of (from, to, is_trunk, bid, waypoints) for this wire
+            # across all its bundles, interleaving its waypoints. All positions in METERS.
+            segments = []
             prev_split = None
-            for b in wire_bundle_list:
+            for s, b in enumerate(wire_bundle_list):
                 td = trunk_data[b["id"]]
                 seg_start = prev_split if prev_split is not None else w_start_m
-                segments.append((seg_start, td["merge_pos"], False, b["id"]))
-                segments.append((td["merge_pos"], td["split_pos"], True, b["id"]))
+                segments.append((seg_start, td["merge_pos"], False, b["id"], gaps[s]))
+                segments.append((td["merge_pos"], td["split_pos"], True, b["id"], []))
                 prev_split = td["split_pos"]
-            # Final segment: last split -> wire end
+            # Final segment: last split -> wire end, carrying any trailing waypoints.
             last_start = prev_split if prev_split is not None else w_start_m
-            segments.append((last_start, w_end_m, False, None))
+            segments.append((last_start, w_end_m, False, None, gaps[K]))
 
             # Route each non-trunk segment, collect results.
             full_poly = []
             branch_len = 0.0
             failed = False
 
-            for seg_idx, (seg_from, seg_to, is_trunk, bid) in enumerate(segments):
+            for seg_idx, (seg_from, seg_to, is_trunk, bid, seg_wps) in enumerate(segments):
                 if is_trunk:
                     td = trunk_data[bid]
                     # Stitch the shared trunk into the full polyline
@@ -432,7 +450,7 @@ class RouterSession:
                         "wire": spec,
                         "start": [float(x) for x in seg_from],
                         "end": [float(x) for x in seg_to],
-                        "waypoints": [], "weights": weights,
+                        "waypoints": [list(x) for x in seg_wps], "weights": weights,
                         "connectivity": wconn, "priority": 0, "clearance_m": 0.0,
                     }
                     seg_res = self.client.solve(session_id, seg_route)

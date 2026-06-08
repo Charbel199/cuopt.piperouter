@@ -81,9 +81,10 @@ def compute_bounds(stage, prims):
     return bmin, bmax
 
 
-def spawn_marker(stage, path, position, color=(0.1, 0.9, 0.1), radius=0.03):
+def spawn_marker(stage, path, position, color=(0.1, 0.9, 0.1), radius=0.03, opacity=1.0):
     """A single draggable Sphere prim (no parent/child split) so the prim you move in
-    the viewport is exactly the one we read back."""
+    the viewport is exactly the one we read back. opacity < 1.0 makes it see-through
+    (e.g. waypoints, so they don't hide the geometry they sit on)."""
     sph = UsdGeom.Sphere.Define(stage, path)
     # reuse the existing translate op if the marker already exists (e.g. on rebuild)
     xf = UsdGeom.Xformable(sph)
@@ -92,7 +93,45 @@ def spawn_marker(stage, path, position, color=(0.1, 0.9, 0.1), radius=0.03):
     op.Set(Gf.Vec3d(float(position[0]), float(position[1]), float(position[2])))
     sph.GetRadiusAttr().Set(float(radius))
     sph.GetDisplayColorAttr().Set([Gf.Vec3f(float(color[0]), float(color[1]), float(color[2]))])
+    sph.GetDisplayOpacityAttr().Set([float(opacity)])
     return sph
+
+
+def spawn_waypoint_marker(stage, path, position, color=(0.1, 0.5, 0.9), radius=0.05,
+                          segments=24):
+    """A see-through wireframe gizmo (three orthogonal rings) used for waypoints, so the
+    routed wire and the geometry behind it stay visible — unlike a solid sphere, and
+    unlike displayOpacity which the RTX viewport ignores without a translucent material.
+
+    Draggable and readable exactly like spawn_marker: the translate op lives on the prim
+    itself, so marker_positions()/get_world_pos() pick it up unchanged."""
+    crv = UsdGeom.BasisCurves.Define(stage, path)
+    xf = UsdGeom.Xformable(crv)
+    ops = [o for o in xf.GetOrderedXformOps() if o.GetOpType() == UsdGeom.XformOp.TypeTranslate]
+    op = ops[0] if ops else xf.AddTranslateOp()
+    op.Set(Gf.Vec3d(float(position[0]), float(position[1]), float(position[2])))
+
+    r = float(radius)
+    th = np.linspace(0.0, 2.0 * np.pi, int(segments), endpoint=False)
+    pts = []
+    for ax in range(3):  # rings in the XY, XZ and YZ planes
+        for t in th:
+            c, s = r * float(np.cos(t)), r * float(np.sin(t))
+            if ax == 0:
+                pts.append(Gf.Vec3f(c, s, 0.0))
+            elif ax == 1:
+                pts.append(Gf.Vec3f(c, 0.0, s))
+            else:
+                pts.append(Gf.Vec3f(0.0, c, s))
+    n = int(segments)
+    crv.GetPointsAttr().Set(pts)
+    crv.GetCurveVertexCountsAttr().Set([n, n, n])
+    crv.GetTypeAttr().Set(UsdGeom.Tokens.linear)
+    crv.GetWrapAttr().Set(UsdGeom.Tokens.periodic)   # closes each ring into a loop
+    crv.GetWidthsAttr().Set([r * 0.1] * (n * 3))
+    crv.SetWidthsInterpolation(UsdGeom.Tokens.vertex)
+    crv.GetDisplayColorAttr().Set([Gf.Vec3f(float(color[0]), float(color[1]), float(color[2]))])
+    return crv
 
 
 def get_world_pos(stage, path):

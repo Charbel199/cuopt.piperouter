@@ -215,6 +215,96 @@ def test_bundle_trunk_and_branches_routed(solver_server):
     assert trunk_prim and trunk_prim.IsValid()
 
 
+def test_bundle_trunk_passes_through_its_waypoint(solver_server):
+    """A waypoint on a bundle forces the shared TRUNK to detour through it, not take the
+    straight merge->split line."""
+    from pxr import Usd
+    from omni.piperouter.router_session import RouterSession
+
+    base, grid_dir = solver_server
+    stage = Usd.Stage.CreateInMemory()
+    from pxr import UsdGeom as _UG
+    _UG.SetStageMetersPerUnit(stage, 1.0)
+    _UG.Xform.Define(stage, "/World")
+    scene_ops.author_box_mesh(stage, "/World/ground",
+                              (2.0, 2.0, -0.05), (6.0, 6.0, 0.05))
+    # merge at (1,1,0.5), split at (3,1,0.5): the straight trunk runs along y=1.
+    scene_ops.spawn_marker(stage, f"{scene_ops.MARKERS_SCOPE}/bW_merge",
+                           (1.0, 1.0, 0.5), radius=0.05)
+    scene_ops.spawn_marker(stage, f"{scene_ops.MARKERS_SCOPE}/bW_split",
+                           (3.0, 1.0, 0.5), radius=0.05)
+    # a waypoint pulled well off that line (+y) — the trunk must bend to reach it.
+    wp = (2.0, 2.2, 0.5)
+    scene_ops.spawn_marker(stage, f"{scene_ops.MARKERS_SCOPE}/bW_wp0", wp, radius=0.05)
+
+    session = RouterSession(grid_dir=grid_dir, solver_url=base)
+    session.voxelize_scene(stage, "bw", resolution=40, pad_frac=0.5)
+
+    spec = wire_library.as_spec(wire_library.by_id(wire_library.load_wire_library(), "sig_can"))
+    wires = [{"name": "w0", "spec": spec, "start": [0.0, 0.5, 0.5],
+              "end": [4.0, 0.5, 0.5], "bundle_id": "bW", "weights": {}, "connectivity": 18},
+             {"name": "w1", "spec": spec, "start": [0.0, 1.5, 0.5],
+              "end": [4.0, 1.5, 0.5], "bundle_id": "bW", "weights": {}, "connectivity": 18}]
+    bundles_list = [{
+        "id": "bW", "name": "bundle W", "kind": "wire", "members": ["w0", "w1"],
+        "merge_marker": f"{scene_ops.MARKERS_SCOPE}/bW_merge",
+        "split_marker": f"{scene_ops.MARKERS_SCOPE}/bW_split",
+        "waypoints": [f"{scene_ops.MARKERS_SCOPE}/bW_wp0"],
+    }]
+
+    results, _bom = session.route_all_with_bundles(stage, "bw", wires, bundles_list)
+    trunk = next(r for r in results if r["wire_id"] == "bundle_bW_trunk")
+    assert trunk["status"] == "routed"
+    poly = np.array(trunk["polyline"])
+    # the trunk must come close to the waypoint (mpu=1.0, so meters == stage units)
+    dmin = float(np.linalg.norm(poly - np.array(wp), axis=1).min())
+    assert dmin < 0.25, f"trunk nearest approach to waypoint was {dmin:.3f} m"
+    # and it genuinely detoured off the straight y=1 line
+    assert float(poly[:, 1].max()) > 1.8
+
+
+def test_bundled_member_honours_its_own_waypoint_before_the_trunk(solver_server):
+    """A waypoint on a BUNDLED wire (slot 0 = before its bundle) must pull that member's
+    branch through the waypoint on the way INTO the trunk — previously ignored."""
+    from pxr import Usd
+    from omni.piperouter.router_session import RouterSession
+
+    base, grid_dir = solver_server
+    stage = Usd.Stage.CreateInMemory()
+    from pxr import UsdGeom as _UG
+    _UG.SetStageMetersPerUnit(stage, 1.0)
+    _UG.Xform.Define(stage, "/World")
+    scene_ops.author_box_mesh(stage, "/World/ground", (2.0, 2.0, -0.05), (6.0, 6.0, 0.05))
+    scene_ops.spawn_marker(stage, f"{scene_ops.MARKERS_SCOPE}/bM_merge", (2.0, 1.0, 0.5), radius=0.05)
+    scene_ops.spawn_marker(stage, f"{scene_ops.MARKERS_SCOPE}/bM_split", (3.5, 1.0, 0.5), radius=0.05)
+
+    session = RouterSession(grid_dir=grid_dir, solver_url=base)
+    session.voxelize_scene(stage, "bm", resolution=40, pad_frac=0.5)
+    spec = wire_library.as_spec(wire_library.by_id(wire_library.load_wire_library(), "sig_can"))
+
+    # w0 carries a waypoint at slot 0 (before the bundle), pulled off to +y; w1 has none.
+    wp = [0.7, 2.4, 0.5]
+    wires = [
+        {"name": "w0", "spec": spec, "start": [0.0, 0.5, 0.5], "end": [4.0, 0.5, 0.5],
+         "weights": {}, "connectivity": 18, "waypoints": [wp], "waypoint_slots": [0]},
+        {"name": "w1", "spec": spec, "start": [0.0, 1.5, 0.5], "end": [4.0, 1.5, 0.5],
+         "weights": {}, "connectivity": 18},
+    ]
+    bundles_list = [{
+        "id": "bM", "name": "bundle M", "kind": "wire", "members": ["w0", "w1"],
+        "merge_marker": f"{scene_ops.MARKERS_SCOPE}/bM_merge",
+        "split_marker": f"{scene_ops.MARKERS_SCOPE}/bM_split",
+    }]
+
+    results, _bom = session.route_all_with_bundles(stage, "bm", wires, bundles_list)
+    by_id = {r["wire_id"]: r for r in results}
+    assert by_id["w0"]["status"] == "routed", by_id["w0"].get("reason")
+    poly = np.array(by_id["w0"]["polyline"])
+    # w0's full polyline must pass near its waypoint; w1 (no waypoint) must not detour there.
+    assert float(np.linalg.norm(poly - np.array(wp), axis=1).min()) < 0.3
+    assert float(np.array(by_id["w1"]["polyline"])[:, 1].max()) < 2.0
+
+
 def test_wire_in_two_bundles_routes_through_both_trunks(solver_server):
     """A wire in two bundles must visit B1_merge→B1_split then B2_merge→B2_split —
     not skip the first bundle or re-route from the original start for B2."""

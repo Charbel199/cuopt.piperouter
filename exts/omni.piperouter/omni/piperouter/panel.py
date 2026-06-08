@@ -243,10 +243,10 @@ class PipeRouterPanel:
         inv = self._stage_inv(stage)  # meters -> stage units (cm/mm/m agnostic)
         merge_path = f"{scene_ops.MARKERS_SCOPE}/{bid}_merge"
         split_path = f"{scene_ops.MARKERS_SCOPE}/{bid}_split"
-        scene_ops.spawn_marker(stage, merge_path, (0.3 * inv, 0.3 * inv, 0.3 * inv),
-                               color=self._BUNDLE_START_COLOR, radius=0.06 * inv)
-        scene_ops.spawn_marker(stage, split_path, (0.8 * inv, 0.3 * inv, 0.3 * inv),
-                               color=self._BUNDLE_END_COLOR, radius=0.06 * inv)
+        scene_ops.spawn_waypoint_marker(stage, merge_path, (0.3 * inv, 0.3 * inv, 0.3 * inv),
+                                         color=self._BUNDLE_START_COLOR, radius=0.045 * inv)
+        scene_ops.spawn_waypoint_marker(stage, split_path, (0.8 * inv, 0.3 * inv, 0.3 * inv),
+                                         color=self._BUNDLE_END_COLOR, radius=0.045 * inv)
         default_type_id = self._bundle_type_ids[0] if self._bundle_type_ids else ""
         self._bundles.append({
             "id": bid, "name": bid, "kind": "wire",
@@ -255,6 +255,8 @@ class PipeRouterPanel:
             "members": [],
             "merge_marker": merge_path,
             "split_marker": split_path,
+            "waypoints": [],     # marker paths the shared trunk must pass through
+            "wp_counter": 0,
             "trunk_polyline": None,
             "trunk_length_m": 0.0,
             "status": "unrouted",
@@ -394,7 +396,7 @@ class PipeRouterPanel:
         b = self._bundles[idx]
         stage = self._get_stage()
         if stage:
-            for path in (b["merge_marker"], b["split_marker"]):
+            for path in (b["merge_marker"], b["split_marker"], *b.get("waypoints", [])):
                 p = stage.GetPrimAtPath(path)
                 if p and p.IsValid():
                     stage.RemovePrim(p.GetPath())
@@ -663,6 +665,9 @@ class PipeRouterPanel:
     def _new_wire(self, key, name, type_index=0):
         return {"key": key, "name": name, "type_index": type_index,
                 "weights": {k: 1.0 for k in _WEIGHTS}, "waypoints": [], "wp_counter": 0,
+                # wp_slots[i] = how many of this wire's bundles come BEFORE waypoint i in
+                # the route order (0 = before the first bundle). Parallel to waypoints.
+                "wp_slots": [],
                 "locked": False, "polyline": None, "status": "unrouted",
                 "length_m": 0.0, "cost": 0.0, "combo": None, "name_model": None,
                 "_swatch": None, "start_head_idx": 0, "end_head_idx": 0, "reason": "",
@@ -690,9 +695,9 @@ class PipeRouterPanel:
         key = f"wire_{self._key_counter}"
         self._key_counter += 1
         scene_ops.spawn_marker(stage, f"{scene_ops.MARKERS_SCOPE}/{key}_start",
-                               (0.0, 0.0, 0.0), color=(0.1, 0.9, 0.1), radius=0.06 * inv)
+                               (0.0, 0.0, 0.0), color=(0.1, 0.9, 0.1), radius=0.035 * inv)
         scene_ops.spawn_marker(stage, f"{scene_ops.MARKERS_SCOPE}/{key}_end",
-                               (0.5 * inv, 0.0, 0.0), color=(0.9, 0.1, 0.1), radius=0.06 * inv)
+                               (0.5 * inv, 0.0, 0.0), color=(0.9, 0.1, 0.1), radius=0.035 * inv)
         self._wires.append(self._new_wire(key, key))
         self._schedule(wires=True)
 
@@ -885,27 +890,63 @@ class PipeRouterPanel:
                     lambda m, *_: self._set_heading("end_head_idx", m))
             ui.Button("+ Add waypoint (route must pass through)",
                       clicked_fn=self._add_waypoint)
-            if w["waypoints"]:
-                ui.Label("  drag the :: handle to reorder (order = route sequence)",
-                         style={"color": 0xFF888888})
-                for i, wp_path in enumerate(w["waypoints"]):
-                    with ui.HStack(height=0, spacing=4) as row:
-                        # drag handle: starts a drag carrying this row's index
-                        handle = ui.Label("::", width=18, style={"color": 0xFFAAAAAA},
-                                          tooltip="Drag to reorder")
-                        handle.set_drag_fn(lambda j=i: str(j))
-                        ui.Label(f"#{i + 1}", width=34,
-                                 style={"color": 0xFFDDDDDD, "font_size": 15})
-                        ui.Button("Locate", width=64,
-                                  clicked_fn=lambda p=wp_path: self._api.select_prim(p))
-                        ui.Button("Delete", width=64,
-                                  clicked_fn=lambda j=i: self._delete_waypoint(j))
-                    # whole row is a drop target -> move dragged index to here
+            itinerary = self._wire_itinerary(w)
+            if itinerary:
+                ui.Label("Route order  —  drag a waypoint by its grip to move it before, "
+                         "between, or after the bundle steps:",
+                         word_wrap=True, style={"color": 0xFF888888})
+
+                def _dot(color):
+                    ui.Rectangle(width=11, height=11,
+                                 style={"background_color": color, "border_radius": 6,
+                                        "border_width": 1, "border_color": 0x44000000})
+
+                def _anchor(text, color):  # Start / End markers (not draggable)
+                    with ui.HStack(height=24, spacing=8):
+                        ui.Spacer(width=6)
+                        _dot(color)
+                        ui.Label(text, style={"color": 0xFFCCCCCC, "font_size": 14})
+
+                _anchor("Start", 0xFF33CC33)
+                for d, tok in enumerate(itinerary):
+                    row = ui.HStack(height=26, spacing=8)
+                    if tok["kind"] == "bundle":
+                        with row:
+                            ui.Spacer(width=6)
+                            _dot(_abgr(self._BUNDLE_START_COLOR))
+                            ui.Label(f"Bundle {tok['name']}  (shared trunk)",
+                                     tooltip="Drop a waypoint here to route just before "
+                                             "or after this trunk.",
+                                     style={"color": _abgr(self._BUNDLE_START_COLOR),
+                                            "font_size": 14})
+                    else:
+                        wpi, wp_path = tok["wpi"], tok["path"]
+                        with row:
+                            grip = ui.Label(":::", width=16,
+                                            style={"color": 0xFF888888, "font_size": 15},
+                                            tooltip="Drag to move in the route order")
+                            grip.set_drag_fn(lambda dd=d: str(dd))
+                            _dot(_abgr((0.1, 0.5, 0.9)))  # matches the blue waypoint marker
+                            ui.Label("Waypoint", style={"color": 0xFFDDDDDD,
+                                                        "font_size": 14})
+                            ui.Spacer()
+                            ui.Button("Locate", width=62,
+                                      clicked_fn=lambda p=wp_path: self._api.select_prim(p))
+                            ui.Button("Delete", width=62,
+                                      clicked_fn=lambda j=wpi: self._delete_waypoint(j))
+                    # every row is a drop target -> move dragged waypoint to this position
                     row.set_accept_drop_fn(lambda *_: True)
-                    row.set_drop_fn(lambda e, dst=i: self._reorder_waypoint(
+                    row.set_drop_fn(lambda e, dst=d: self._move_wire_waypoint(
                         int(e.mime_data), dst))
-            else:
-                ui.Label("  (no waypoints)", style={"color": 0xFF888888})
+
+                end_row = ui.HStack(height=24, spacing=8)
+                with end_row:
+                    ui.Spacer(width=6)
+                    _dot(0xFF3333CC)
+                    ui.Label("End", style={"color": 0xFFCCCCCC, "font_size": 14})
+                end_row.set_accept_drop_fn(lambda *_: True)
+                end_row.set_drop_fn(lambda e, dst=len(itinerary): self._move_wire_waypoint(
+                    int(e.mime_data), dst))
             with ui.HStack(height=0):
                 ui.Button("Re-route this wire", clicked_fn=self._on_refine,
                           style={"background_color": _PRIMARY, "color": 0xFFFFFFFF})
@@ -981,6 +1022,27 @@ class PipeRouterPanel:
                 s.model.add_value_changed_fn(
                     lambda m, kk=k, i=bidx: self._set_bundle_weight(i, kk, m))
                 self._bundle_sliders[k] = s
+        ui.Button("+ Add waypoint (trunk must pass through)",
+                  clicked_fn=self._add_bundle_waypoint)
+        if b["waypoints"]:
+            ui.Label("  drag the :: handle to reorder (order = trunk sequence)",
+                     style={"color": 0xFF888888})
+            for i, wp_path in enumerate(b["waypoints"]):
+                with ui.HStack(height=0, spacing=4) as row:
+                    handle = ui.Label("::", width=18, style={"color": 0xFFAAAAAA},
+                                      tooltip="Drag to reorder")
+                    handle.set_drag_fn(lambda j=i: str(j))
+                    ui.Label(f"#{i + 1}", width=34,
+                             style={"color": 0xFFDDDDDD, "font_size": 15})
+                    ui.Button("Locate", width=64,
+                              clicked_fn=lambda p=wp_path: self._api.select_prim(p))
+                    ui.Button("Delete", width=64,
+                              clicked_fn=lambda j=i: self._delete_bundle_waypoint(j))
+                row.set_accept_drop_fn(lambda *_: True)
+                row.set_drop_fn(lambda e, dst=i: self._reorder_bundle_waypoint(
+                    int(e.mime_data), dst))
+        else:
+            ui.Label("  (no waypoints)", style={"color": 0xFF888888})
         with ui.HStack(height=0):
             ui.Button("Re-route bundle", clicked_fn=self._on_refine_bundle,
                       style={"background_color": _PRIMARY, "color": 0xFFFFFFFF})
@@ -1017,8 +1079,12 @@ class PipeRouterPanel:
         start = scene_ops.get_world_pos(stage, f"{scene_ops.MARKERS_SCOPE}/{w['key']}_start")
         pos = (float(start[0]) + 0.3 * inv, float(start[1]), float(start[2])) if start is not None \
             else (0.25 * inv, 0.0, 0.0)
-        scene_ops.spawn_marker(stage, path, pos, color=(0.1, 0.5, 0.9), radius=0.1 * inv)
+        scene_ops.spawn_waypoint_marker(stage, path, pos, color=(0.1, 0.5, 0.9),
+                                         radius=0.05 * inv)
         w["waypoints"].append(path)
+        # new waypoint lands in the last gap (after all the wire's bundles, before end);
+        # the user drags it earlier in the itinerary if they want.
+        w.setdefault("wp_slots", []).append(len(self._wire_bundles(w)))
         self._api.select_prim(path)  # auto-select so it can be dragged immediately
         self._schedule(inspector=True)
 
@@ -1035,27 +1101,109 @@ class PipeRouterPanel:
             if p and p.IsValid():
                 stage.RemovePrim(p.GetPath())
         del w["waypoints"][idx]
+        if idx < len(w.get("wp_slots", [])):
+            del w["wp_slots"][idx]
         self._schedule(inspector=True)
 
-    def _reorder_waypoint(self, src, dst):
-        # drag-drop reorder of the selected wire's waypoints (order = route legs).
+    # ----- per-wire route itinerary (waypoints interleaved with bundle steps) -----
+    def _wire_bundles(self, w):
+        """The wire's bundles in the GLOBAL bundle order (self._bundles order)."""
+        return [b for b in self._bundles if w["name"] in b["members"]]
+
+    def _wire_itinerary(self, w):
+        """Ordered list of route steps between start and end: waypoints (placed by their
+        slot) interleaved with this wire's bundle trunks (in global order). Each token is
+        {"kind": "wp", "wpi": <waypoint index>, "path": ...} or {"kind": "bundle", ...}."""
+        bundles = self._wire_bundles(w)
+        K = len(bundles)
+        slots = w.get("wp_slots", [])
+        tokens = []
+        for s in range(K + 1):
+            for i, path in enumerate(w["waypoints"]):
+                si = slots[i] if i < len(slots) else K
+                if min(max(int(si), 0), K) == s:
+                    tokens.append({"kind": "wp", "wpi": i, "path": path})
+            if s < K:
+                b = bundles[s]
+                tokens.append({"kind": "bundle", "id": b["id"], "name": b["name"]})
+        return tokens
+
+    def _move_wire_waypoint(self, src_disp, dst_disp):
+        """Drag-drop within the itinerary: move the waypoint at display index src_disp to
+        display index dst_disp, then recompute every waypoint's slot from the new order
+        (slot = number of bundle steps before it). Bundles keep their global order."""
         if self._selected is None or self._selected >= len(self._wires):
             return
         w = self._wires[self._selected]
-        w["waypoints"] = waypoints.reorder(w["waypoints"], src, dst)
-        self._schedule(inspector=True)  # re-numbers rows + refreshes viewport labels
+        tokens = self._wire_itinerary(w)
+        if not (0 <= src_disp < len(tokens)) or tokens[src_disp]["kind"] != "wp":
+            return
+        tokens = waypoints.reorder(tokens, src_disp, dst_disp)
+        new_paths, new_slots, bcount = [], [], 0
+        for t in tokens:
+            if t["kind"] == "bundle":
+                bcount += 1
+            else:
+                new_paths.append(t["path"])
+                new_slots.append(bcount)
+        w["waypoints"], w["wp_slots"] = new_paths, new_slots
+        self._schedule(inspector=True)  # re-renders itinerary + refreshes viewport labels
+
+    # ----- bundle trunk waypoints (the shared trunk must pass through these) -----
+    def _add_bundle_waypoint(self):
+        stage = self._get_stage()
+        if stage is None or self._selected_bundle is None \
+                or self._selected_bundle >= len(self._bundles):
+            return
+        b = self._bundles[self._selected_bundle]
+        n = b["wp_counter"]
+        b["wp_counter"] += 1
+        path = f"{scene_ops.MARKERS_SCOPE}/{b['id']}_wp{n}"
+        inv = self._stage_inv(stage)  # meters -> stage units (cm/mm/m agnostic)
+        merge = scene_ops.get_world_pos(stage, b["merge_marker"])
+        pos = (float(merge[0]) + 0.3 * inv, float(merge[1]), float(merge[2])) \
+            if merge is not None else (0.25 * inv, 0.0, 0.0)
+        # amber-ish so trunk waypoints read as "bundle", and see-through like the rest
+        scene_ops.spawn_waypoint_marker(stage, path, pos, color=(0.95, 0.6, 0.1),
+                                         radius=0.045 * inv)
+        b["waypoints"].append(path)
+        self._api.select_prim(path)  # auto-select so it can be dragged immediately
+        self._schedule(inspector=True)
+
+    def _delete_bundle_waypoint(self, idx):
+        if self._selected_bundle is None or self._selected_bundle >= len(self._bundles):
+            return
+        b = self._bundles[self._selected_bundle]
+        if idx >= len(b["waypoints"]):
+            return
+        path = b["waypoints"][idx]
+        stage = self._get_stage()
+        if stage is not None:
+            p = stage.GetPrimAtPath(path)
+            if p and p.IsValid():
+                stage.RemovePrim(p.GetPath())
+        del b["waypoints"][idx]
+        self._schedule(inspector=True)
+
+    def _reorder_bundle_waypoint(self, src, dst):
+        if self._selected_bundle is None or self._selected_bundle >= len(self._bundles):
+            return
+        b = self._bundles[self._selected_bundle]
+        b["waypoints"] = waypoints.reorder(b["waypoints"], src, dst)
+        self._schedule(inspector=True)
 
     def _refresh_vp_labels(self):
-        """Update the viewport order-number overlay for the SELECTED wire: S at the
-        start marker, 1..N above each waypoint (in route order), E at the end."""
+        """Persistent viewport text for EVERY wire and bundle (always on, not just the
+        selection). Each wire <n> shows W<n>S at its start, W<n>.<k> above its k-th
+        waypoint, and W<n>E at its end; each bundle <n> shows B<n>S at its start (merge)
+        marker and B<n>E at its end (split) marker."""
         vpl = getattr(self, "_vp_labels", None)
         if vpl is None:
             return
         stage = self._get_stage()
-        if stage is None or self._selected is None or self._selected >= len(self._wires):
+        if stage is None:
             vpl.clear()
             return
-        w = self._wires[self._selected]
         up = self._stage_up_offset(stage)
         items = []
 
@@ -1064,10 +1212,20 @@ class PipeRouterPanel:
             if p is not None:
                 items.append(((p[0] + up[0], p[1] + up[1], p[2] + up[2]), text, color))
 
-        _add(f"{scene_ops.MARKERS_SCOPE}/{w['key']}_start", "S", 0xFF33CC33)  # green
-        for i, wp_path in enumerate(w["waypoints"]):
-            _add(wp_path, str(i + 1), 0xFFFFFFFF)
-        _add(f"{scene_ops.MARKERS_SCOPE}/{w['key']}_end", "E", 0xFF3333CC)    # red
+        for wi, w in enumerate(self._wires):
+            tag = f"W{wi + 1}"
+            _add(f"{scene_ops.MARKERS_SCOPE}/{w['key']}_start", f"{tag}S", 0xFF33CC33)  # green
+            for k, wp_path in enumerate(w["waypoints"]):
+                _add(wp_path, f"{tag}.{k + 1}", 0xFFFFFFFF)                              # waypoint
+            _add(f"{scene_ops.MARKERS_SCOPE}/{w['key']}_end", f"{tag}E", 0xFF3333CC)    # red
+
+        for bi, b in enumerate(self._bundles):
+            tag = f"B{bi + 1}"
+            _add(b["merge_marker"], f"{tag}S", _abgr(self._BUNDLE_START_COLOR))   # amber
+            for k, wp_path in enumerate(b.get("waypoints", [])):
+                _add(wp_path, f"{tag}.{k + 1}", _abgr(self._BUNDLE_START_COLOR))  # trunk waypoint
+            _add(b["split_marker"], f"{tag}E", _abgr(self._BUNDLE_END_COLOR))     # orange
+
         vpl.update(items)
 
     @staticmethod
@@ -1077,10 +1235,11 @@ class PipeRouterPanel:
         try:
             from pxr import UsdGeom
             axis = UsdGeom.GetStageUpAxis(stage)
-            d = 0.25
+            mpu = float(UsdGeom.GetStageMetersPerUnit(stage))
+            d = 0.12 / mpu if mpu > 1e-9 else 0.12  # ~12 cm above the marker, in stage units
             return (0.0, d, 0.0) if axis == UsdGeom.Tokens.y else (0.0, 0.0, d)
         except Exception:
-            return (0.0, 0.0, 0.25)
+            return (0.0, 0.0, 0.12)
 
     # --------------------------------------------------------------- solving
     def _gather_wire(self, w, priority=0):
@@ -1089,16 +1248,18 @@ class PipeRouterPanel:
         end = scene_ops.get_world_pos(stage, f"{scene_ops.MARKERS_SCOPE}/{w['key']}_end")
         if start is None or end is None:
             return None
-        wps = []
-        for wp_path in w["waypoints"]:
+        wps, wp_slots = [], []
+        slots = w.get("wp_slots", [])
+        for i, wp_path in enumerate(w["waypoints"]):
             p = scene_ops.get_world_pos(stage, wp_path)
             if p is not None:
                 wps.append([float(x) for x in p])
+                wp_slots.append(int(slots[i]) if i < len(slots) else 0)
         sh = headings.axis_to_vector(headings.HEADING_OPTIONS[w.get("start_head_idx", 0)])
         eh = headings.axis_to_vector(headings.HEADING_OPTIONS[w.get("end_head_idx", 0)])
         return {"name": w["name"], "spec": wire_library.as_spec(self._types[w["type_index"]]),
                 "start": [float(x) for x in start], "end": [float(x) for x in end],
-                "waypoints": wps, "weights": dict(w["weights"]),
+                "waypoints": wps, "waypoint_slots": wp_slots, "weights": dict(w["weights"]),
                 "connectivity": self._connectivity(), "priority": priority,
                 "clearance_m": float(self._clearance.model.get_value_as_float()),
                 "start_heading": list(sh) if sh else None,

@@ -17,6 +17,18 @@ def test_marker_roundtrips_position():
     assert np.allclose(pos, [1.0, 2.0, 3.0])
 
 
+def test_waypoint_marker_is_wireframe_and_roundtrips_position():
+    s = _stage()
+    path = "/World/PipeRouter/markers/w0_wp0"
+    scene_ops.spawn_waypoint_marker(s, path, (1.0, 2.0, 3.0), radius=0.05, segments=24)
+    # it's a wireframe gizmo (BasisCurves: 3 closed rings), not a solid sphere
+    crv = UsdGeom.BasisCurves(s.GetPrimAtPath(path))
+    assert crv
+    assert list(crv.GetCurveVertexCountsAttr().Get()) == [24, 24, 24]
+    # readable/draggable like a normal marker
+    assert np.allclose(scene_ops.get_world_pos(s, path), [1.0, 2.0, 3.0])
+
+
 def test_author_tube_creates_curve_with_points():
     s = _stage()
     poly = [(0, 0, 0), (1, 0, 0), (1, 1, 0)]
