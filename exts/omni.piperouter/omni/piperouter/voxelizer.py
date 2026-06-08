@@ -39,6 +39,7 @@ def _ensure_warp():
         rj: int,
         rk: int,
         clearance: float,
+        surface_band: float,
         max_dist: float,
         occupied: wp.array(dtype=wp.int32),
         dist_out: wp.array(dtype=wp.float32),
@@ -60,9 +61,11 @@ def _ensure_warp():
             d = wp.length(center - cp)
             dist_out[idx] = d
             if query.sign < 0.0:
-                occupied[idx] = 1
+                occupied[idx] = 1            # cell centre inside a solid (>=cell-thick) volume
+            elif d < surface_band:
+                occupied[idx] = 1            # surface passes THROUGH this cell -> watertight
             elif d < clearance:
-                occupied[idx] = 1
+                occupied[idx] = 1            # within requested safety clearance of the surface
         else:
             dist_out[idx] = max_dist
 
@@ -135,16 +138,22 @@ def collect_meshes(stage, prims):
 
 
 def voxelize(points, indices, bounds_min, cell_size, res_xyz,
-             clearance=None, max_dist=None, device=None):
+             clearance=None, surface_band=None, max_dist=None, device=None):
     """Return (occupancy uint8 (ri,rj,rk), surface_dist float32 (ri,rj,rk))."""
     ri, rj, rk = int(res_xyz[0]), int(res_xyz[1]), int(res_xyz[2])
     if clearance is None:
-        # 0 = mark only cells whose CENTER is inside the mesh (sign < 0), i.e. the
-        # occupancy hugs the mesh volume ("purely inside"). Safety clearance is then
-        # added later as a dilation (solver + overlay), so it visibly grows outward.
-        # NOTE: a >=cell-thick wall is needed for interior detection; sub-cell shells
-        # would need a small surface band here (documented phase-2 caveat).
+        # 0 = beyond the watertight surface band (below), add no extra safety margin
+        # here. Safety clearance is added later as a dilation (solver + overlay), so it
+        # visibly grows outward.
         clearance = 0.0
+    if surface_band is None:
+        # Mark cells the surface passes THROUGH so thin shells (door panels, sheet metal)
+        # are watertight even when no cell centre lands inside them. A continuous wall's
+        # nearest cell-centre is at most 0.5*cell away (axis-aligned worst case; tilted
+        # planes are closer), so 0.6*cell guarantees every column crossing the wall has
+        # an occupied cell — no straight-line tunnelling — while adding only a thin shell
+        # (not the ~1-cell dilation a full half-diagonal band would impose on every solid).
+        surface_band = 0.6 * float(cell_size)
     if max_dist is None:
         max_dist = 8.0 * float(cell_size)
     if len(points) == 0 or len(indices) == 0:
@@ -163,7 +172,8 @@ def voxelize(points, indices, bounds_min, cell_size, res_xyz,
         _voxelize_kernel,
         dim=(ri, rj, rk),
         inputs=[mesh.id, origin, float(cell_size), rj, rk,
-                float(clearance), float(max_dist), occ_flat, dist_flat],
+                float(clearance), float(surface_band), float(max_dist),
+                occ_flat, dist_flat],
         device=device,
     )
     wp.synchronize()
