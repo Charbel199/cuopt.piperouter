@@ -2,6 +2,8 @@
 thermal/EM tag read/write. pxr-only so it is testable headlessly with usd-core."""
 from __future__ import annotations
 
+import json
+
 import numpy as np
 from pxr import Gf, Sdf, Usd, UsdGeom
 
@@ -11,6 +13,28 @@ MARKERS_SCOPE = PIPEROUTER_ROOT + "/markers"
 DEBUG_SCOPE = PIPEROUTER_ROOT + "/debug"
 TEMP_ATTR = "piperouter:temp_c"
 EM_ATTR = "piperouter:em_strength"
+SESSION_KEY = "piperouterSession"   # customData key holding the embedded panel session
+
+
+def write_session(stage, data: dict):
+    """Embed the panel session dict (as JSON) in customData on the PipeRouter root prim,
+    so it travels with the stage on Save / usdz export."""
+    root = UsdGeom.Scope.Define(stage, PIPEROUTER_ROOT)
+    root.GetPrim().SetCustomDataByKey(SESSION_KEY, json.dumps(data))
+
+
+def read_session(stage):
+    """Return the embedded session dict, or None if the stage has no PipeRouter session."""
+    prim = stage.GetPrimAtPath(PIPEROUTER_ROOT)
+    if not prim or not prim.IsValid():
+        return None
+    raw = prim.GetCustomDataByKey(SESSION_KEY)
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except Exception:
+        return None
 
 
 def list_collidable_meshes(stage, exclude_prefixes=(PIPEROUTER_ROOT,)):

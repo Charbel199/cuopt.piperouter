@@ -21,7 +21,7 @@ from pxr import Tf, Usd
 
 from . import bom as bom_lib
 from . import bundles as bundle_lib
-from . import headings, hud as hud_mod, scene_ops, viewport_labels, waypoints, wire_library
+from . import headings, hud as hud_mod, scene_ops, session_io, viewport_labels, waypoints, wire_library
 
 _WEIGHTS = ("surface", "bend", "thermal", "em", "smoothing")
 
@@ -176,6 +176,15 @@ class PipeRouterPanel:
                               height=28,
                               tooltip="Full engine-bay + chassis: 15 obstacles, 14 "
                                       "wires/pipes across all types.")
+                with ui.HStack(height=0, spacing=4):
+                    ui.Button("Save session...", clicked_fn=self._on_save, height=28,
+                              tooltip="Save the whole session (geometry, markers, routes, "
+                                      "wires/bundles/settings) to one editable .usd file.")
+                    ui.Button("Load session...", clicked_fn=self._on_load, height=28,
+                              tooltip="Open a saved .usd session and restore everything.")
+                    ui.Button("Export .usdz...", clicked_fn=self._on_export_usdz, height=28,
+                              tooltip="Export the session to a single compressed .usdz "
+                                      "archive for sharing / handoff.")
                 with ui.HStack(height=0):
                     ui.Label("Grid resolution", width=110)
                     self._res = ui.IntField()
@@ -724,6 +733,225 @@ class PipeRouterPanel:
             self._key_counter += 1
         self._schedule(wires=True, inspector=True, tags=True)
         self._progress.text = f"{label} scene ready — {len(descriptors)} wires. Click ROUTE ALL."
+
+    # ------------------------------------------------------------- save / load
+    def _session_state(self):
+        """The full panel session as a JSON-safe dict (geometry/markers/routes live in the
+        stage; this captures the logic). type_id is stored alongside type_index so wire
+        types survive even if the library order changes."""
+        settings = {
+            "resolution": self._res.model.get_value_as_int(),
+            "connectivity_idx": int(
+                self._conn_combo.model.get_item_value_model().get_value_as_int()),
+            "clearance": float(self._clearance.model.get_value_as_float()),
+            "hud_visible": bool(self._hud_visible),
+        }
+        counters = {"key_counter": self._key_counter,
+                    "bundle_counter": self._bundle_counter}
+        wires = []
+        for w in self._wires:
+            wd = dict(w)
+            ti = w.get("type_index", 0)
+            wd["type_id"] = self._type_ids[ti] if 0 <= ti < len(self._type_ids) else ""
+            wires.append(wd)
+        return session_io.serialize(wires, self._bundles, settings, counters)
+
+    def _apply_session(self, data):
+        """Rebuild the panel from a saved session dict (markers/geometry already restored
+        by opening the stage)."""
+        wires, bundles, settings, counters = session_io.deserialize(data)
+
+        self._wires = []
+        for i, wd in enumerate(wires):
+            tid = wd.get("type_id")
+            ti = self._type_ids.index(tid) if tid in self._type_ids \
+                else int(wd.get("type_index", 0))
+            ti = max(0, min(ti, len(self._types) - 1))
+            w = self._new_wire(wd.get("key", f"wire_{i}"), wd.get("name", f"wire_{i}"), ti)
+            for k in ("weights", "waypoints", "wp_slots", "wp_counter", "start_head_idx",
+                      "end_head_idx", "locked", "status", "reason", "length_m", "cost",
+                      "polyline", "cells", "raw_polyline"):
+                if k in wd:
+                    w[k] = wd[k]
+            self._wires.append(w)
+
+        self._bundles = []
+        for bd in bundles:
+            b = dict(bd)
+            b.setdefault("waypoints", [])
+            b.setdefault("wp_counter", 0)
+            b.setdefault("weights", {k: 1.0 for k in _WEIGHTS})
+            b.setdefault("trunk_polyline", None)
+            b.setdefault("trunk_length_m", 0.0)
+            b.setdefault("status", "unrouted")
+            b.setdefault("reason", "")
+            self._bundles.append(b)
+
+        self._selected = None
+        self._selected_bundle = None
+        self._active_debug = None
+        self._key_counter = int(counters.get("key_counter", len(self._wires)))
+        self._bundle_counter = int(counters.get("bundle_counter", len(self._bundles)))
+
+        self._res.model.set_value(int(settings.get("resolution", 64)))
+        self._conn_combo.model.get_item_value_model().set_value(
+            int(settings.get("connectivity_idx", 1)))
+        self._clearance.model.set_value(float(settings.get("clearance", 0.0)))
+
+        # rebuild the BOM aggregate from the restored routed wires + bundle trunks
+        self._last_bom = []
+        for w in self._wires:
+            if w.get("status") == "routed":
+                ml = self._types[w["type_index"]]
+                self._last_bom.append({
+                    "wire_id": w["name"], "status": "routed",
+                    "length_m": float(w.get("length_m", 0.0)),
+                    "cost": float(w.get("cost", 0.0)),
+                    "mass": float(w.get("length_m", 0.0)) * float(ml.get("mass_per_m_kg", 0.0)),
+                    "reason": "",
+                })
+
+        self._schedule(wires=True, bundles=True, inspector=True, bom=True, tags=True)
+        self._refresh_views()
+        self._refresh_overlay()
+        self._refresh_hud()
+        self._refresh_vp_labels()
+
+    def _pick_file(self, title, apply_label, exts, handler):
+        """Open the native Omniverse file dialog and call handler(full_path)."""
+        try:
+            from omni.kit.window.filepicker import FilePickerDialog
+
+            def _apply(filename, dirname):
+                name = filename or ""
+                path = (dirname.rstrip("/") + "/" + name) if dirname else name
+                try:
+                    dialog.hide()
+                except Exception:
+                    pass
+                handler(path)
+
+            try:
+                dialog = FilePickerDialog(
+                    title, apply_button_label=apply_label,
+                    click_apply_handler=_apply, file_extension_options=exts,
+                )
+            except TypeError:
+                # older/newer Kit builds vary on this kwarg — fall back without it
+                dialog = FilePickerDialog(
+                    title, apply_button_label=apply_label, click_apply_handler=_apply,
+                )
+            dialog.show()
+        except Exception as exc:
+            self._progress.text = (f"file dialog unavailable ({exc}); "
+                                   f"enable omni.kit.window.filepicker")
+
+    def _on_save(self):
+        self._pick_file("Save PipeRouter session", "Save",
+                        [(".usd", "USD scene")], self._do_save)
+
+    def _on_load(self):
+        self._pick_file("Load PipeRouter session", "Load",
+                        [(".usd", "USD scene"), (".usda", "USD ascii"),
+                         (".usdc", "USD crate"), (".usdz", "USD archive")],
+                        self._do_load)
+
+    def _on_export_usdz(self):
+        self._pick_file("Export PipeRouter session (.usdz)", "Export",
+                        [(".usdz", "USD archive")], self._do_export_usdz)
+
+    def _do_save(self, path):
+        stage = self._get_stage()
+        if stage is None:
+            self._progress.text = "no USD stage open"
+            return
+        if not path:
+            return
+        if not path.lower().endswith((".usd", ".usda", ".usdc")):
+            path += ".usd"
+        try:
+            scene_ops.write_session(stage, self._session_state())
+            ok = stage.Export(path)
+            self._progress.text = (f"Saved session -> {path}" if ok
+                                   else f"save failed: {path}")
+        except Exception as exc:
+            self._progress.text = f"save failed: {exc}"
+
+    def _do_load(self, path):
+        if not path:
+            return
+        try:
+            from pxr import Usd as _Usd
+            probe = _Usd.Stage.Open(path)
+            data = scene_ops.read_session(probe) if probe else None
+        except Exception as exc:
+            self._progress.text = f"load failed: {exc}"
+            return
+        if data is None:
+            self._progress.text = "no PipeRouter session embedded in that file"
+            return
+        try:
+            omni.usd.get_context().open_stage(path)
+        except Exception as exc:
+            self._progress.text = f"could not open {path}: {exc}"
+            return
+        self._apply_session(data)
+        self._progress.text = (f"Loaded session <- {path}  "
+                               f"({len(self._wires)} wires, {len(self._bundles)} bundles)")
+
+    def _do_export_usdz(self, path):
+        stage = self._get_stage()
+        if stage is None:
+            self._progress.text = "no USD stage open"
+            return
+        if not path:
+            return
+        if not path.lower().endswith(".usdz"):
+            path += ".usdz"
+        try:
+            import os
+            import tempfile
+            from pxr import UsdUtils
+            scene_ops.write_session(stage, self._session_state())
+            # Package into a LOCAL temp file: CreateNewUsdzPackage's zip writer is
+            # local-filesystem only and fails (TfSafeOutputFile::Replace) when the
+            # destination is Nucleus / omniverse:// or a non-writable folder.
+            tmpdir = tempfile.mkdtemp(prefix="piperouter_")
+            tmp_src = os.path.join(tmpdir, "session_src.usd")
+            tmp_usdz = os.path.join(tmpdir, "session.usdz")
+            stage.Export(tmp_src)
+            if not UsdUtils.CreateNewUsdzPackage(tmp_src, tmp_usdz):
+                self._progress.text = "usdz packaging failed"
+                return
+            # then copy the archive to the chosen destination (local OR Nucleus)
+            if self._copy_file(tmp_usdz, path):
+                self._progress.text = f"Exported -> {path}"
+            else:
+                self._progress.text = f"usdz export: could not write {path}"
+        except Exception as exc:
+            self._progress.text = f"usdz export failed: {exc}"
+
+    @staticmethod
+    def _copy_file(src_local, dst):
+        """Copy a local file to dst, which may be a local path OR a Nucleus URL. Uses
+        omni.client (resolver-aware) when the dest isn't a plain local path."""
+        import os
+        import shutil
+        is_url = "://" in dst
+        if not is_url:
+            try:
+                os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)
+                shutil.copyfile(src_local, dst)
+                return True
+            except Exception:
+                pass
+        try:
+            import omni.client
+            with open(src_local, "rb") as f:
+                data = f.read()
+            return omni.client.write_file(dst, data) == omni.client.Result.OK
+        except Exception:
+            return False
 
     def _delete_wire(self, idx):
         stage = self._get_stage()
