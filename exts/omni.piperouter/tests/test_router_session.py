@@ -88,6 +88,21 @@ def test_no_path_reason_flows_through_http(solver_server):
     assert bom[0]["reason"]                # ...and carried into the BOM row
 
 
+def test_selected_algorithm_flows_through_http(solver_server, cube_stage):
+    # the global/local algorithm choice must travel route-dict -> schema -> RouteRequest
+    # -> solver dispatch and still produce a route.
+    base, grid_dir = solver_server
+    stage = cube_stage
+    session = RouterSession(grid_dir=grid_dir, solver_url=base)
+    session.global_planner, session.local_optimizer = "astar", "trajopt"
+    session.voxelize_scene(stage, "algo", resolution=24)
+    spec = wire_library.as_spec(wire_library.by_id(wire_library.load_wire_library(), "sig_can"))
+    wire = {"name": "a", "spec": spec, "start": [0.1, 0.1, 0.5], "end": [0.9, 0.1, 0.5],
+            "connectivity": 18}
+    results, _bom = session.route_all(stage, "algo", [wire])
+    assert results[0]["status"] == "routed"
+
+
 def test_clearance_bakes_more_prohibited_voxels(cube_stage):
     # the core mental model: more clearance -> more prohibited voxels in the grid
     session = RouterSession()   # compute_grids is local; no solver needed

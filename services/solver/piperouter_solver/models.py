@@ -84,6 +84,10 @@ class RouteRequest:
     # end_heading: direction the route must ARRIVE at the end cell.
     start_heading: tuple[float, float, float] | None = None
     end_heading: tuple[float, float, float] | None = None
+    # Pluggable algorithm choice (for evaluation / comparison). Defaults reproduce the
+    # proven pipeline exactly. See planners.py / optimizers.py for the registries.
+    global_planner: str = "lattice"   # "lattice" | "astar" | "fmm" | "rrt"
+    local_optimizer: str = "fibre"    # "fibre" | "none" | "trajopt" | "elastic_rod"
 
 
 @dataclass

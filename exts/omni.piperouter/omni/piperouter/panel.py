@@ -25,6 +25,15 @@ from . import headings, hud as hud_mod, scene_ops, session_io, viewport_labels, 
 
 _WEIGHTS = ("surface", "bend", "thermal", "em", "smoothing")
 
+# Selectable routing algorithms (sent to the solver). Index order = ComboBox order.
+# The _ALGOS tuples are the VALUES sent to the solver; the _LABELS are what the combo
+# shows — everything except the production defaults (lattice / fibre) is tagged
+# "(experimental)" so an engineer knows which pair is the supported one.
+_GLOBAL_ALGOS = ("lattice", "astar", "fmm", "rrt", "octree", "medial")
+_LOCAL_ALGOS = ("fibre", "none", "trajopt", "elastic_rod")
+_GLOBAL_LABELS = tuple(n if n == "lattice" else f"{n} (experimental)" for n in _GLOBAL_ALGOS)
+_LOCAL_LABELS = tuple(n if n in ("fibre", "none") else f"{n} (experimental)" for n in _LOCAL_ALGOS)
+
 # Slider help — shown as tooltips so the soft constraints are self-explanatory.
 _WEIGHT_HELP = {
     "surface": ("Surface hug", "Pull the route toward nearby surfaces so it can be "
@@ -207,8 +216,8 @@ class PipeRouterPanel:
                                      "Fast(6)=axis-only (blocky, ~4x faster); "
                                      "Balanced(18)=+2D diagonals; Smooth(26)=+3D corners "
                                      "(densest, slowest). Smoothing rounds all of them.")
-                    # index 0/1/2 -> 6/18/26; default Balanced (18)
-                    self._conn_combo = ui.ComboBox(1, "Fast (6)", "Balanced (18)",
+                    # index 0/1/2 -> 6/18/26; default Smooth (26)
+                    self._conn_combo = ui.ComboBox(2, "Fast (6)", "Balanced (18)",
                                                    "Smooth (26)")
                 with ui.HStack(height=0):
                     ui.Label("Safety clearance (m)", width=130,
@@ -223,6 +232,18 @@ class PipeRouterPanel:
                     # point cloud under /World/PipeRouter/debug.
                     self._overlay_combo = ui.ComboBox(0, "None", "Occupancy", "Thermal", "EM")
                     self._overlay_combo.model.add_item_changed_fn(self._on_overlay)
+                with ui.HStack(height=0):
+                    ui.Label("Global algorithm", width=110,
+                             tooltip="Path-finding method (experimental). lattice = "
+                                     "production heading-aware default; others for "
+                                     "comparison: astar, fmm (Eikonal), rrt, octree, medial.")
+                    self._global_combo = ui.ComboBox(0, *_GLOBAL_LABELS)
+                with ui.HStack(height=0):
+                    ui.Label("Local optimizer", width=110,
+                             tooltip="Smoothing/shaping method. fibre = production "
+                                     "least-squares default; none = raw; trajopt = "
+                                     "SDF trajectory optimization; elastic_rod = physics rod.")
+                    self._local_combo = ui.ComboBox(0, *_LOCAL_LABELS)
         self._update_readout()
 
     def _section_wires(self):
@@ -625,12 +646,26 @@ class PipeRouterPanel:
         return self._default_url  # URL is fixed for now; Reconnect re-probes it
 
     def _connectivity(self):
-        """6 / 18 / 26 from the Connectivity combo (index 0/1/2); default 18."""
+        """6 / 18 / 26 from the Connectivity combo (index 0/1/2); default 26."""
         combo = getattr(self, "_conn_combo", None)
         if combo is None:
-            return 18
+            return 26
         idx = int(combo.model.get_item_value_model().get_value_as_int())
-        return (6, 18, 26)[idx] if idx in (0, 1, 2) else 18
+        return (6, 18, 26)[idx] if idx in (0, 1, 2) else 26
+
+    def _global_algo(self):
+        combo = getattr(self, "_global_combo", None)
+        if combo is None:
+            return "lattice"
+        i = int(combo.model.get_item_value_model().get_value_as_int())
+        return _GLOBAL_ALGOS[i] if 0 <= i < len(_GLOBAL_ALGOS) else "lattice"
+
+    def _local_algo(self):
+        combo = getattr(self, "_local_combo", None)
+        if combo is None:
+            return "fibre"
+        i = int(combo.model.get_item_value_model().get_value_as_int())
+        return _LOCAL_ALGOS[i] if 0 <= i < len(_LOCAL_ALGOS) else "fibre"
 
     def _update_readout(self):
         res = self._res.model.get_value_as_int()
@@ -819,6 +854,8 @@ class PipeRouterPanel:
                 self._conn_combo.model.get_item_value_model().get_value_as_int()),
             "clearance": float(self._clearance.model.get_value_as_float()),
             "hud_visible": bool(self._hud_visible),
+            "global_algo": self._global_algo(),
+            "local_algo": self._local_algo(),
         }
         counters = {"key_counter": self._key_counter,
                     "bundle_counter": self._bundle_counter}
@@ -869,8 +906,14 @@ class PipeRouterPanel:
 
         self._res.model.set_value(int(settings.get("resolution", 64)))
         self._conn_combo.model.get_item_value_model().set_value(
-            int(settings.get("connectivity_idx", 1)))
+            int(settings.get("connectivity_idx", 2)))   # default Smooth (26)
         self._clearance.model.set_value(float(settings.get("clearance", 0.0)))
+        if settings.get("global_algo") in _GLOBAL_ALGOS:
+            self._global_combo.model.get_item_value_model().set_value(
+                _GLOBAL_ALGOS.index(settings["global_algo"]))
+        if settings.get("local_algo") in _LOCAL_ALGOS:
+            self._local_combo.model.get_item_value_model().set_value(
+                _LOCAL_ALGOS.index(settings["local_algo"]))
 
         # rebuild the BOM aggregate from the restored routed wires + bundle trunks
         self._last_bom = []
@@ -1614,10 +1657,11 @@ class PipeRouterPanel:
             results, bom, err = self._api.route_all_bundles(
                 wires, self._bundles_with_cost(),
                 self._res.model.get_value_as_int(),
-                self._url_value())
+                self._url_value(), self._global_algo(), self._local_algo())
         else:
             results, bom, err = self._api.route_all(
-                wires, self._res.model.get_value_as_int(), self._url_value())
+                wires, self._res.model.get_value_as_int(), self._url_value(),
+                self._global_algo(), self._local_algo())
 
         if err:
             self._progress.text = f"error: {err}"
@@ -1683,7 +1727,8 @@ class PipeRouterPanel:
         self._progress.text = f"re-routing {w['name']}..."
         result, bom_row, err = self._api.refine(wire, obstacles,
                                                 self._res.model.get_value_as_int(),
-                                                self._url_value())
+                                                self._url_value(),
+                                                self._global_algo(), self._local_algo())
         if err:
             self._progress.text = f"error: {err}"
             return
@@ -1727,7 +1772,7 @@ class PipeRouterPanel:
         results, bom, err = self._api.route_all_bundles(
             wires, self._bundles_with_cost(),   # ALL bundles with harness type costs
             self._res.model.get_value_as_int(),
-            self._url_value())
+            self._url_value(), self._global_algo(), self._local_algo())
         if err:
             self._progress.text = f"bundle re-route error: {err}"
             return

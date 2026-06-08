@@ -42,6 +42,8 @@ class RouteSpec(BaseModel):
     clearance_m: float = 0.0
     start_heading: list[float] | None = None
     end_heading: list[float] | None = None
+    global_planner: str = "lattice"
+    local_optimizer: str = "fibre"
 
     def to_route_request(self) -> RouteRequest:
         return RouteRequest(
@@ -55,6 +57,8 @@ class RouteSpec(BaseModel):
             clearance_m=self.clearance_m,
             start_heading=tuple(self.start_heading) if self.start_heading else None,
             end_heading=tuple(self.end_heading) if self.end_heading else None,
+            global_planner=self.global_planner,
+            local_optimizer=self.local_optimizer,
         )
 
 

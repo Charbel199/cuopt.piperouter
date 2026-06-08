@@ -166,12 +166,15 @@ class PipeRouterExtension(omni.ext.IExt):
         except Exception as exc:
             carb.log_warn(f"[piperouter] _frame_scene failed (non-critical): {exc}")
 
-    def route_all(self, wires, resolution, url):
+    def route_all(self, wires, resolution, url, global_planner="lattice",
+                  local_optimizer="fibre"):
         try:
             clr = wires[0].get("clearance_m", 0.0) if wires else 0.0
             carb.log_info(f"[piperouter] Route All: {len(wires)} wire(s) at resolution "
-                          f"{resolution}, safety clearance {clr} m")
+                          f"{resolution}, safety clearance {clr} m, "
+                          f"algo {global_planner}/{local_optimizer}")
             s = self._ensure_session(url)
+            s.global_planner, s.local_optimizer = global_planner, local_optimizer
             clr = wires[0].get("clearance_m", 0.0) if wires else 0.0
             self._voxelize(resolution, url, clearance_m=clr)   # bakes clearance into the grid
             cell = s.last_grids[1] if getattr(s, "last_grids", None) else None
@@ -193,12 +196,14 @@ class PipeRouterExtension(omni.ext.IExt):
             carb.log_error(f"[piperouter] route_all failed: {exc}")
             return None, None, str(exc)
 
-    def route_all_bundles(self, wires, bundles, resolution, url):
+    def route_all_bundles(self, wires, bundles, resolution, url,
+                          global_planner="lattice", local_optimizer="fibre"):
         try:
             clr = wires[0].get("clearance_m", 0.0) if wires else 0.0
             carb.log_info(f"[piperouter] Route All (bundles): {len(wires)} wire(s), "
                           f"{len(bundles)} bundle(s), resolution {resolution}")
             s = self._ensure_session(url)
+            s.global_planner, s.local_optimizer = global_planner, local_optimizer
             self._voxelize(resolution, url, clearance_m=clr)
             results, bom = s.route_all_with_bundles(
                 self._get_stage(), self._sid, wires, bundles)
@@ -210,9 +215,11 @@ class PipeRouterExtension(omni.ext.IExt):
             carb.log_error(f"[piperouter] route_all_bundles failed: {exc}")
             return None, None, str(exc)
 
-    def refine(self, wire, locked_wires, resolution, url):
+    def refine(self, wire, locked_wires, resolution, url, global_planner="lattice",
+               local_optimizer="fibre"):
         try:
             s = self._ensure_session(url)
+            s.global_planner, s.local_optimizer = global_planner, local_optimizer
             # always re-voxelize: the grid is framed to include all current markers,
             # so a freshly-dragged waypoint (possibly beyond the geometry) is covered
             clr = float(wire.get("clearance_m", 0.0))

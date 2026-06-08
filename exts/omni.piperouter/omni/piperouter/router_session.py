@@ -41,6 +41,9 @@ class RouterSession:
         self.last_stats = {}      # stats from the last compute_grids (for logging/UI)
         self.last_grids = None    # (bounds_min, cell, res, occ, thermal, em) for views/overlay
         self.mpu = 1.0            # meters per stage unit (set in compute_grids)
+        # selected routing algorithms (sent to the solver in every route request)
+        self.global_planner = "lattice"
+        self.local_optimizer = "fibre"
 
     @staticmethod
     def _mpu(stage):
@@ -173,6 +176,8 @@ class RouterSession:
                 "clearance_m": 0.0,  # already baked into the voxel grid (compute_grids)
                 "start_heading": w.get("start_heading"),
                 "end_heading": w.get("end_heading"),
+                "global_planner": self.global_planner,
+                "local_optimizer": self.local_optimizer,
             })
 
         resp = self.client.solve_all(session_id, routes)
@@ -231,6 +236,8 @@ class RouterSession:
             "clearance_m": 0.0,  # already baked into the voxel grid (compute_grids)
             "start_heading": wire.get("start_heading"),
             "end_heading": wire.get("end_heading"),
+            "global_planner": self.global_planner,
+            "local_optimizer": self.local_optimizer,
         }
         res = self.client.solve(session_id, route, locked_routes=locked_routes)
 
@@ -348,6 +355,8 @@ class RouterSession:
                 "end": [float(x) for x in split_pos],
                 "waypoints": trunk_wps, "weights": trunk_weights,
                 "connectivity": conn, "priority": 0, "clearance_m": 0.0,
+                "global_planner": self.global_planner,
+                "local_optimizer": self.local_optimizer,
             }
             trunk_res = self.client.solve(session_id, trunk_route)
             if trunk_res["status"] != "routed":
@@ -475,6 +484,8 @@ class RouterSession:
                         "waypoints": [list(x) for x in seg_wps], "weights": weights,
                         "connectivity": wconn, "priority": 0, "clearance_m": 0.0,
                         "start_heading": prev_heading, "end_heading": goal_h,
+                        "global_planner": self.global_planner,
+                        "local_optimizer": self.local_optimizer,
                     }
                     seg_res = self.client.solve(session_id, seg_route)
                     if seg_res["status"] != "routed" and (prev_heading or goal_h):
