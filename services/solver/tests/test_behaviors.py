@@ -58,6 +58,49 @@ def test_gentle_bend_preferred_over_sharp(empty_stack):
     assert stiff.length_m >= floppy.length_m  # stiffness trades length for gentleness
 
 
+def _turns(cells):
+    """Count heading changes along a grid path (0 = perfectly straight)."""
+    dirs = [tuple(int(v) for v in np.sign(np.subtract(q, p)))
+            for p, q in zip(cells, cells[1:])]
+    return sum(1 for a, b in zip(dirs, dirs[1:]) if a != b)
+
+
+def test_bend_slider_straightens_route(empty_stack):
+    # an off-axis target forces a staircase of diagonal + straight steps. A strong bend
+    # weight must group the turns into a near-straight route; a relaxed one need not.
+    relaxed = Solver().route_one(
+        empty_stack, _between(empty_stack, (0, 0, 1), (9, 3, 1), weights={"bend": 0.0}))
+    strong = Solver().route_one(
+        empty_stack, _between(empty_stack, (0, 0, 1), (9, 3, 1), weights={"bend": 10.0}))
+    assert relaxed.status == strong.status == "routed"
+    # quadratic-amplified bend weight should drive the path to the minimum turns (<=2),
+    # and never more turns than the unconstrained route.
+    assert _turns(strong.cells) <= 2
+    assert _turns(strong.cells) <= _turns(relaxed.cells)
+
+
+def test_waypoint_join_is_not_a_sharp_turn(empty_stack):
+    # start east of a waypoint, then the route must head north-east to the end. With
+    # heading continuity across legs, the path leaves the waypoint along its arrival
+    # heading and bends gradually — no free sharp turn at the join.
+    s = empty_stack
+    wp = (5, 0, 1)
+    res = Solver().route_one(
+        s, _between(s, (0, 0, 1), (9, 5, 1), waypoints=[s.frame.grid_to_world(wp)],
+                    weights={"bend": 10.0}))
+    assert res.status == "routed"
+    cells = res.cells
+    idx = min(range(len(cells)),
+              key=lambda i: sum((cells[i][k] - wp[k]) ** 2 for k in range(3)))
+    assert 0 < idx < len(cells) - 1
+    h_in = np.sign(np.subtract(cells[idx], cells[idx - 1]))
+    h_out = np.sign(np.subtract(cells[idx + 1], cells[idx]))
+    cos = float(np.dot(h_in, h_out) /
+                (np.linalg.norm(h_in) * np.linalg.norm(h_out) + 1e-9))
+    angle = np.degrees(np.arccos(np.clip(cos, -1.0, 1.0)))
+    assert angle <= 46.0, f"sharp {angle:.0f} turn at the waypoint"
+
+
 def test_hot_region_avoided_when_weighted(empty_stack):
     s = empty_stack
     s.thermal[:, 5, :] = 90.0  # warm band (below the 200C rating, so soft only)

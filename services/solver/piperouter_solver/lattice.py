@@ -275,11 +275,15 @@ class ExpandedLatticeBuilder:
         # (0 = allow sharp turns, >1 = prefer straighter/gentler routes). Bend radius
         # is intrinsic via the wire's min_bend_radius; this slider scales how hard we
         # weigh it.
+        # Amplify the slider QUADRATICALLY so it has real bite: high values bend a LOT
+        # less. weight 1 -> 1x (default unchanged), 3 -> 9x, 5 -> 25x, 10 -> 100x; 0 still
+        # frees turns entirely. (Linear scaling barely moved the route even at the max.)
         bend_w = float(weights.get("bend", 1.0))
+        bend_scale = bend_w * bend_w
         turn_lut = np.zeros((H, H), dtype=np.float64)
         for a in range(H):
             for b in range(H):
-                turn_lut[a, b] = bend_w * turn_penalty(
+                turn_lut[a, b] = bend_scale * turn_penalty(
                     tuple(int(v) for v in offs[a]),
                     tuple(int(v) for v in offs[b]),
                     wire.min_bend_radius_mm, cell_mm,

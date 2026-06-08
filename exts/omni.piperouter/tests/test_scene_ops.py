@@ -29,6 +29,35 @@ def test_waypoint_marker_is_wireframe_and_roundtrips_position():
     assert np.allclose(scene_ops.get_world_pos(s, path), [1.0, 2.0, 3.0])
 
 
+def test_bend_heatmap_flags_sharp_corner_on_coarse_path():
+    # a 90 deg corner over long (0.5 m) segments, min bend 55 mm. The chord-based radius
+    # would read this coarse corner as a gentle arc; resampling to the bend radius must
+    # still flag it RED (this was the "no hotspots with smoothing 0" bug).
+    s = _stage()
+    poly = [(0.0, 0.0, 0.0), (0.5, 0.0, 0.0), (0.5, 0.5, 0.0)]
+    scene_ops.author_bend_heatmap(s, "t", poly, min_bend_radius_mm=55.0)
+    crv = UsdGeom.BasisCurves(s.GetPrimAtPath(f"{scene_ops.DEBUG_SCOPE}/bend_t"))
+    cols = crv.GetDisplayColorAttr().Get()
+    reds = [c for c in cols if c[0] > 0.9 and c[1] < 0.2]
+    assert reds, "sharp corner should produce at least one red (below-min-bend) vertex"
+
+
+def test_hide_and_show_route_toggles_visibility():
+    s = _stage()
+    scene_ops.author_tube(s, f"{scene_ops.ROUTES_SCOPE}/w0", [(0, 0, 0), (1, 0, 0)], 0.01)
+    scene_ops.author_tube(s, f"{scene_ops.ROUTES_SCOPE}/w0_seg0", [(0, 0, 0), (1, 0, 0)], 0.01)
+    scene_ops.author_tube(s, f"{scene_ops.ROUTES_SCOPE}/w1", [(0, 0, 0), (1, 0, 0)], 0.01)
+
+    scene_ops.hide_route(s, "w0")
+    vis = lambda p: UsdGeom.Imageable(s.GetPrimAtPath(p)).GetVisibilityAttr().Get()
+    assert vis(f"{scene_ops.ROUTES_SCOPE}/w0") == UsdGeom.Tokens.invisible
+    assert vis(f"{scene_ops.ROUTES_SCOPE}/w0_seg0") == UsdGeom.Tokens.invisible  # branch segs too
+    assert vis(f"{scene_ops.ROUTES_SCOPE}/w1") != UsdGeom.Tokens.invisible       # other wires untouched
+
+    scene_ops.set_all_routes_visible(s)
+    assert vis(f"{scene_ops.ROUTES_SCOPE}/w0") == UsdGeom.Tokens.inherited
+
+
 def test_author_tube_creates_curve_with_points():
     s = _stage()
     poly = [(0, 0, 0), (1, 0, 0), (1, 1, 0)]
@@ -41,11 +70,14 @@ def test_author_tube_creates_curve_with_points():
 
 def test_author_colored_points_per_point_color():
     s = _stage()
+    # rendered as BasisCurves stubs (2 verts/point) so the RTX viewport actually draws them
     p = scene_ops.author_colored_points(
         s, scene_ops.DEBUG_SCOPE + "/thermal",
         [(0, 0, 0), (1, 0, 0)], [(1, 0, 0), (0, 0, 1)], size=0.05)
-    assert len(p.GetPointsAttr().Get()) == 2
-    assert len(p.GetDisplayColorAttr().Get()) == 2     # one color per point
+    assert p.GetPrim().IsA(UsdGeom.BasisCurves)
+    assert list(p.GetCurveVertexCountsAttr().Get()) == [2, 2]   # one stub per point
+    assert len(p.GetPointsAttr().Get()) == 4                    # 2 verts per point
+    assert len(p.GetDisplayColorAttr().Get()) == 4              # one color per vertex
     assert str(p.GetDisplayColorPrimvar().GetInterpolation()) == "vertex"
 
 
@@ -69,8 +101,9 @@ def test_points_overlay_and_clear():
     s = _stage()
     scene_ops.author_points(s, scene_ops.DEBUG_SCOPE + "/occ",
                             [(0, 0, 0), (1, 1, 1)], size=0.02)
-    pts = UsdGeom.Points(s.GetPrimAtPath(scene_ops.DEBUG_SCOPE + "/occ"))
-    assert len(pts.GetPointsAttr().Get()) == 2
+    crv = UsdGeom.BasisCurves(s.GetPrimAtPath(scene_ops.DEBUG_SCOPE + "/occ"))
+    assert list(crv.GetCurveVertexCountsAttr().Get()) == [2, 2]   # one stub per point
+    assert len(crv.GetPointsAttr().Get()) == 4
     scene_ops.clear_debug(s)
     assert not s.GetPrimAtPath(scene_ops.DEBUG_SCOPE).IsValid()
 

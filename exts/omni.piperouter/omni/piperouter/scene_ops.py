@@ -176,6 +176,28 @@ def clear_routes(stage):
         stage.RemovePrim(prim.GetPath())
 
 
+def set_all_routes_visible(stage):
+    """Make every authored route tube visible again (undo any debug-view hide)."""
+    routes = stage.GetPrimAtPath(ROUTES_SCOPE)
+    if not routes or not routes.IsValid():
+        return
+    for prim in routes.GetChildren():
+        UsdGeom.Imageable(prim).CreateVisibilityAttr().Set(UsdGeom.Tokens.inherited)
+
+
+def hide_route(stage, wire_name):
+    """Hide a wire's final tube(s) so a per-wire debug view (cells, grid-vs-smooth,
+    cost terrain, bend heatmap) isn't occluded by the cable. Matches the wire's own
+    tube and any bundle branch segments (<name>_seg<i>)."""
+    routes = stage.GetPrimAtPath(ROUTES_SCOPE)
+    if not routes or not routes.IsValid():
+        return
+    for prim in routes.GetChildren():
+        nm = prim.GetName()
+        if nm == wire_name or nm.startswith(wire_name + "_seg"):
+            UsdGeom.Imageable(prim).CreateVisibilityAttr().Set(UsdGeom.Tokens.invisible)
+
+
 def author_box_mesh(stage, path, center, size, color=(0.5, 0.5, 0.5)):
     """Author an axis-aligned box as a real UsdGeom.Mesh (the voxelizer collects
     Meshes, not Cube prims). `size` is full extents."""
@@ -198,28 +220,50 @@ def author_box_mesh(stage, path, center, size, color=(0.5, 0.5, 0.5)):
     return mesh
 
 
+def _author_blob_cloud(stage, path, points, size, colors=None, color=(0.2, 0.6, 1.0)):
+    """Render a point cloud as short fat BasisCurves stubs — one tiny 2-vertex linear
+    curve (width = size) per point. We use curves, NOT UsdGeom.Points, because the RTX
+    viewport renders curves reliably while it routinely fails to draw Points at all
+    (that's why the debug dot-clouds were invisible). Per-point color is supported via
+    vertex-interpolated displayColor (2 verts per point)."""
+    pts_in = [(float(p[0]), float(p[1]), float(p[2])) for p in points]
+    n = len(pts_in)
+    crv = UsdGeom.BasisCurves.Define(stage, path)
+    # Very short stub (length << width) so the round end-caps dominate and each point
+    # reads as a CIRCLE/sphere, not an elongated pill.
+    off = float(size) * 0.08
+    verts = []
+    for x, y, z in pts_in:
+        verts.append(Gf.Vec3f(x - off, y, z))
+        verts.append(Gf.Vec3f(x + off, y, z))
+    crv.GetPointsAttr().Set(verts)
+    crv.GetCurveVertexCountsAttr().Set([2] * n)
+    crv.GetTypeAttr().Set(UsdGeom.Tokens.linear)
+    crv.GetWidthsAttr().Set([float(size)] * (2 * n))
+    crv.SetWidthsInterpolation(UsdGeom.Tokens.vertex)
+    if colors is not None:
+        col = []
+        for c in colors:
+            v = Gf.Vec3f(float(c[0]), float(c[1]), float(c[2]))
+            col.append(v)
+            col.append(v)   # one color per vertex, 2 verts per point
+        crv.GetDisplayColorAttr().Set(col)
+        crv.GetDisplayColorPrimvar().SetInterpolation(UsdGeom.Tokens.vertex)
+    else:
+        crv.GetDisplayColorAttr().Set(
+            [Gf.Vec3f(float(color[0]), float(color[1]), float(color[2]))])
+    return crv
+
+
 def author_points(stage, path, points, size=0.01, color=(0.2, 0.6, 1.0)):
-    """A UsdGeom.Points cloud (used for the occupancy debug overlay)."""
-    pts_prim = UsdGeom.Points.Define(stage, path)
-    pts = [Gf.Vec3f(float(p[0]), float(p[1]), float(p[2])) for p in points]
-    pts_prim.GetPointsAttr().Set(pts)
-    pts_prim.GetWidthsAttr().Set([float(size)] * len(pts))
-    pts_prim.GetDisplayColorAttr().Set([Gf.Vec3f(float(color[0]), float(color[1]), float(color[2]))])
-    return pts_prim
+    """A debug dot cloud (used for the occupancy overlay + per-wire cells)."""
+    return _author_blob_cloud(stage, path, points, size, colors=None, color=color)
 
 
 def author_colored_points(stage, path, points, colors, size=0.02):
-    """Like author_points but with a PER-POINT color (vertex interpolation), used for
-    the thermal/EM debug clouds where each cell is tinted by its field value."""
-    pts_prim = UsdGeom.Points.Define(stage, path)
-    pts_prim.GetPointsAttr().Set([Gf.Vec3f(float(p[0]), float(p[1]), float(p[2]))
-                                  for p in points])
-    pts_prim.GetWidthsAttr().Set([float(size)] * len(points))
-    pts_prim.GetDisplayColorAttr().Set(
-        [Gf.Vec3f(float(c[0]), float(c[1]), float(c[2])) for c in colors])
-    # vertex interpolation = one color per point (else USD expects a single constant)
-    pts_prim.GetDisplayColorPrimvar().SetInterpolation(UsdGeom.Tokens.vertex)
-    return pts_prim
+    """Like author_points but with a PER-POINT color, used for the thermal/EM/cost
+    debug clouds where each cell is tinted by its field value."""
+    return _author_blob_cloud(stage, path, points, size, colors=colors)
 
 
 def author_wire_cells(stage, wire_name, cells, gbmin, cell_size, color=(0.8, 0.1, 0.1),
@@ -236,8 +280,9 @@ def author_wire_cells(stage, wire_name, cells, gbmin, cell_size, color=(0.8, 0.1
                   size=float(cell_size) * 0.5, color=color)
 
 
-def author_raw_path(stage, wire_name, raw_polyline, color=(0.8, 0.8, 0.0)):
-    """BasisCurves for the stair-stepped grid path BEFORE smoothing."""
+def author_raw_path(stage, wire_name, raw_polyline, color=(0.8, 0.8, 0.0), width=0.02):
+    """BasisCurves for the stair-stepped grid path BEFORE smoothing. width is in STAGE
+    units (callers scale by 1/metersPerUnit so it stays visible in cm/mm stages)."""
     if not raw_polyline or len(raw_polyline) < 2:
         return
     crv = UsdGeom.BasisCurves.Define(stage, f"{DEBUG_SCOPE}/raw_{wire_name}")
@@ -245,7 +290,7 @@ def author_raw_path(stage, wire_name, raw_polyline, color=(0.8, 0.8, 0.0)):
     crv.GetPointsAttr().Set(pts)
     crv.GetCurveVertexCountsAttr().Set([len(pts)])
     crv.GetTypeAttr().Set(UsdGeom.Tokens.linear)
-    crv.GetWidthsAttr().Set([0.02] * len(pts))
+    crv.GetWidthsAttr().Set([float(width)] * len(pts))
     crv.SetWidthsInterpolation(UsdGeom.Tokens.vertex)
     crv.GetDisplayColorAttr().Set([Gf.Vec3f(float(color[0]), float(color[1]), float(color[2]))])
 
@@ -262,18 +307,39 @@ def author_bend_heatmap(stage, wire_name, polyline, min_bend_radius_mm, cap=5_00
     pts = [np.asarray(p, dtype=np.float64) for p in polyline]
     if len(pts) < 3:
         return
-    colors = []
+
+    # Resample to a fixed step (one min-bend-radius) so curvature is measured over a
+    # CONSISTENT arc length instead of the grid cell size. Without this a sharp corner on
+    # a coarse grid spreads its turn over a big cell and reads as a gentle arc (big chord
+    # -> big implied radius) so it never flags red. Long segments get subdivided; original
+    # vertices (the actual corners) are preserved, and already-dense smooth paths are left
+    # as-is, so a real smooth curve still reads its true radius.
+    min_bend_m = max(float(min_bend_radius_mm) / 1000.0, 1e-4)
+    ds = min_bend_m
+    rs = [pts[0]]
+    for a, b in zip(pts[:-1], pts[1:]):
+        seg = b - a
+        L = float(np.linalg.norm(seg))
+        if L < 1e-9:
+            continue
+        n = max(1, int(np.ceil(L / ds)))
+        for k in range(1, n + 1):
+            rs.append(a + seg * (k / n))
+    pts = rs
+    if len(pts) < 3:
+        return
+
     seg_colors = []
-    # compute curvature radius at each interior vertex
+    # compute curvature radius at each interior (resampled) vertex
     for i in range(len(pts)):
         if i == 0 or i == len(pts) - 1:
-            seg_colors.append((0.3, 0.9, 0.3))   # endpoints default green
+            seg_colors.append((0.1, 0.85, 0.1))   # endpoints default green
             continue
         a, b, c = pts[i - 1], pts[i], pts[i + 1]
         ab, bc = b - a, c - b
         n_ab, n_bc = np.linalg.norm(ab), np.linalg.norm(bc)
         if n_ab < 1e-9 or n_bc < 1e-9:
-            seg_colors.append((0.3, 0.9, 0.3))
+            seg_colors.append((0.1, 0.85, 0.1))
             continue
         cos_a = float(np.clip(np.dot(ab / n_ab, bc / n_bc), -1.0, 1.0))
         angle = np.arccos(cos_a)          # turning angle in radians

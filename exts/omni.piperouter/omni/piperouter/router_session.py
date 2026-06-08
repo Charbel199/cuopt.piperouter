@@ -59,6 +59,14 @@ class RouterSession:
         """Scale a list of [x,y,z] points by factor f."""
         return [[float(p[0]) * f, float(p[1]) * f, float(p[2]) * f] for p in pts]
 
+    @staticmethod
+    def _hdg(p, q):
+        """Unit direction from p to q (world axes align with grid axes, so it doubles as
+        a lattice heading). None for a degenerate zero-length step."""
+        d = np.asarray(q, dtype=float) - np.asarray(p, dtype=float)
+        n = float(np.linalg.norm(d))
+        return [float(x) for x in (d / n)] if n > 1e-9 else None
+
     def compute_grids(self, stage, resolution=64, pad_frac=0.05, clearance_m=0.0):
         """Read the stage and build the four voxel grids (occupancy, surface distance,
         thermal, EM) IN MEMORY. The safety clearance is BAKED INTO the occupancy here
@@ -434,10 +442,13 @@ class RouterSession:
             last_start = prev_split if prev_split is not None else w_start_m
             segments.append((last_start, w_end_m, False, None, gaps[K]))
 
-            # Route each non-trunk segment, collect results.
+            # Route each non-trunk segment, collect results. Heading continuity is threaded
+            # across segments so the branch joins the shared trunk (and leaves it) smoothly
+            # instead of kinking at merge/split — the same fix route_one does for waypoints.
             full_poly = []
             branch_len = 0.0
             failed = False
+            prev_heading = None   # arrival heading carried into the next segment
 
             for seg_idx, (seg_from, seg_to, is_trunk, bid, seg_wps) in enumerate(segments):
                 if is_trunk:
@@ -445,15 +456,32 @@ class RouterSession:
                     # Stitch the shared trunk into the full polyline
                     full_poly = bundle_lib.stitch_polylines(
                         full_poly, td["poly"], []) if full_poly else list(td["poly"])
+                    tp = td["poly"]
+                    if len(tp) >= 2:   # next branch leaves the split along the trunk's exit
+                        prev_heading = self._hdg(tp[-2], tp[-1])
                 else:
+                    # if the next segment is a trunk, arrive at its merge aligned with the
+                    # trunk's entry direction so the join is smooth
+                    goal_h = None
+                    nxt = segments[seg_idx + 1] if seg_idx + 1 < len(segments) else None
+                    if nxt is not None and nxt[2]:
+                        ntp = trunk_data[nxt[3]]["poly"]
+                        if len(ntp) >= 2:
+                            goal_h = self._hdg(ntp[0], ntp[1])
                     seg_route = {
                         "wire": spec,
                         "start": [float(x) for x in seg_from],
                         "end": [float(x) for x in seg_to],
                         "waypoints": [list(x) for x in seg_wps], "weights": weights,
                         "connectivity": wconn, "priority": 0, "clearance_m": 0.0,
+                        "start_heading": prev_heading, "end_heading": goal_h,
                     }
                     seg_res = self.client.solve(session_id, seg_route)
+                    if seg_res["status"] != "routed" and (prev_heading or goal_h):
+                        # continuity headings over-constrained this segment -> retry relaxed
+                        seg_route["start_heading"] = None
+                        seg_route["end_heading"] = None
+                        seg_res = self.client.solve(session_id, seg_route)
                     if seg_res["status"] != "routed":
                         reason = seg_res.get("reason", "Branch segment could not be routed.")
                         all_results.append({"wire_id": wire_name, "status": "no_path",
@@ -465,6 +493,8 @@ class RouterSession:
                         failed = True
                         break
                     poly = seg_res["polyline"]
+                    if len(poly) >= 2:   # carry this segment's exit heading to the next
+                        prev_heading = self._hdg(poly[-2], poly[-1])
                     branch_len += float(seg_res["length_m"])
                     full_poly = (bundle_lib.stitch_polylines(full_poly, poly, [])
                                  if full_poly else list(poly))

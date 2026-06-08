@@ -84,6 +84,7 @@ class PipeRouterPanel:
         self._bundles = []
         self._bundle_counter = 0
         self._selected_bundle = None   # index into self._bundles, or None
+        self._active_debug = None      # (wire_name, mode) of the live per-wire debug view
         self._checklist_collapsed = {}  # bid -> bool: user-controlled collapsed state
         self._vp_labels = viewport_labels.ViewportOrderLabels()
         self._hud = hud_mod.ViewportHUD()
@@ -736,6 +737,11 @@ class PipeRouterPanel:
                 p = stage.GetPrimAtPath(wp)
                 if p and p.IsValid():
                     stage.RemovePrim(p.GetPath())
+        if self._active_debug and self._active_debug[0] == w["name"]:
+            self._active_debug = None
+            if stage is not None:
+                scene_ops.clear_debug(stage)
+                scene_ops.set_all_routes_visible(stage)
         del self._wires[idx]
         if self._selected == idx:
             self._selected = None
@@ -965,15 +971,39 @@ class PipeRouterPanel:
             _WIRE_DEBUG_IDS = (
                 "none", "cells", "raw_path", "cost_terrain", "bend_radius",
             )
-            dd = ui.ComboBox(0, *_WIRE_DEBUG_MODES)
+            # reflect the live debug view for this wire (persists across reroutes)
+            cur = (self._active_debug[1]
+                   if self._active_debug and self._active_debug[0] == w["name"] else "none")
+            cur_idx = _WIRE_DEBUG_IDS.index(cur) if cur in _WIRE_DEBUG_IDS else 0
+            dd = ui.ComboBox(cur_idx, *_WIRE_DEBUG_MODES)
             dd.model.add_item_changed_fn(
                 lambda m, e, ww=w, ids=_WIRE_DEBUG_IDS:
                     self._on_wire_debug(ww, ids[int(m.get_item_value_model().get_value_as_int())]))
 
+    def _debug_payload(self, w):
+        """Wire dict for show_wire_debug, with spec attached so the bend heatmap uses the
+        wire's real min_bend_radius and the cells use its color."""
+        d = dict(w)
+        d["spec"] = wire_library.as_spec(self._types[w["type_index"]])
+        return d
+
     def _on_wire_debug(self, wire, mode):
-        err = self._api.show_wire_debug(wire, mode)
+        self._active_debug = None if mode == "none" else (wire["name"], mode)
+        err = self._api.show_wire_debug(self._debug_payload(wire), mode)
         if err:
             self._progress.text = err
+
+    def _refresh_debug(self):
+        """Re-author the live per-wire debug view against the latest grids/polyline, so it
+        stays correct after a Route All / Re-route (otherwise it shows stale geometry)."""
+        if not self._active_debug:
+            return
+        name, mode = self._active_debug
+        w = next((x for x in self._wires if x["name"] == name), None)
+        if w is None:
+            self._active_debug = None
+            return
+        self._api.show_wire_debug(self._debug_payload(w), mode)
 
     def _rebuild_inspector_bundle(self, bidx):
         """Bundle inspector shown inside the Selected wire frame when a bundle is selected."""
@@ -1317,6 +1347,7 @@ class PipeRouterPanel:
         self._refresh_views()
         self._refresh_overlay()
         self._refresh_hud()
+        self._refresh_debug()
 
     def _on_refine(self):
         if self._selected is None:
@@ -1366,6 +1397,7 @@ class PipeRouterPanel:
         self._refresh_views()
         self._refresh_overlay()
         self._refresh_hud()
+        self._refresh_debug()
 
     def _on_refine_bundle(self):
         """Re-route the currently selected bundle (called from bundle inspector)."""
@@ -1424,6 +1456,7 @@ class PipeRouterPanel:
         self._refresh_views()
         self._refresh_overlay()
         self._refresh_hud()
+        self._refresh_debug()
 
     # ------------------------------------------------------ tag / overlay / io
     def _refresh_views(self, force=False):

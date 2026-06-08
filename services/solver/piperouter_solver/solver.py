@@ -43,19 +43,35 @@ class Solver:
         all_cells: list[tuple[int, int, int]] = []
         wp_cell_idx: list[int] = []   # index in all_cells of each waypoint's cell
         n_legs = len(cell_seq) - 1
+        # Heading continuity across legs: each leg leaves a waypoint along the heading it
+        # arrived with, so the bend penalty applies THROUGH the waypoint instead of a free
+        # sharp turn there (legs are solved independently, so without this the join kinks).
+        prev_arrival = None
         for li, (a, b) in enumerate(zip(cell_seq[:-1], cell_seq[1:])):
-            sh = req.start_heading if li == 0 else None
+            sh = req.start_heading if li == 0 else prev_arrival
             gh = req.end_heading if li == n_legs - 1 else None
             leg = self._solve_leg(
                 stack, req.wire, req.weights, req.connectivity, a, b, extra_obstacles,
                 clearance_m=req.clearance_m, start_heading=sh, goal_heading=gh,
             )
+            if leg is None and li > 0 and sh is not None:
+                # the continuity heading over-constrained this leg (e.g. a hairpin
+                # waypoint that demands a >45 turn) — retry without it rather than fail.
+                leg = self._solve_leg(
+                    stack, req.wire, req.weights, req.connectivity, a, b, extra_obstacles,
+                    clearance_m=req.clearance_m, start_heading=None, goal_heading=gh,
+                )
             if leg is None:
                 reason = diagnose_no_path(
                     stack, req.wire, req.connectivity, a, b, extra_obstacles,
-                    clearance_m=req.clearance_m, start_heading=sh, goal_heading=gh,
+                    clearance_m=req.clearance_m,
+                    start_heading=(req.start_heading if li == 0 else None), goal_heading=gh,
                 )
                 return RouteResult(wire_id=req.wire.id, status="no_path", reason=reason)
+            # arrival heading = direction of the leg's final step (feeds the next leg)
+            if len(leg) >= 2:
+                d = np.subtract(leg[-1], leg[-2])
+                prev_arrival = tuple(int(np.sign(v)) for v in d)
             if all_cells and leg and all_cells[-1] == leg[0]:
                 leg = leg[1:]
             all_cells.extend(leg)

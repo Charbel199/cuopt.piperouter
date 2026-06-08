@@ -314,12 +314,17 @@ class PipeRouterExtension(omni.ext.IExt):
             if stage is None:
                 return "no USD stage is open"
             scene_ops.clear_debug(stage)
+            # Always reset visibility first, so switching wires/modes never leaves a
+            # previously-hidden cable hidden.
+            scene_ops.set_all_routes_visible(stage)
             if mode == "none" or not wire:
                 return None
 
             wire_name = wire.get("name", "?")
             spec = wire.get("spec", {})
             color = tuple(float(c) for c in spec.get("color", (0.8, 0.1, 0.1)))
+            # Hide this wire's final tube so the debug geometry below is clearly visible.
+            scene_ops.hide_route(stage, wire_name)
 
             s = getattr(self, "_session", None)
             grids = getattr(s, "last_grids", None) if s else None
@@ -344,7 +349,7 @@ class PipeRouterExtension(omni.ext.IExt):
                 poly = wire.get("polyline", [])
                 raw_s = (np.asarray(raw, dtype=np.float64) * inv).tolist()
                 scene_ops.author_raw_path(stage, wire_name + "_raw", raw_s,
-                                          color=(0.9, 0.9, 0.1))
+                                          color=(0.9, 0.9, 0.1), width=0.02 * inv)
                 if poly and len(poly) >= 2:
                     poly_s = (np.asarray(poly, dtype=np.float64) * inv).tolist()
                     scene_ops.author_tube(stage,
