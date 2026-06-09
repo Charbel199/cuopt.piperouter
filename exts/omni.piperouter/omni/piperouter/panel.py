@@ -13,7 +13,9 @@ from __future__ import annotations
 import asyncio
 import csv
 import json
+import traceback
 
+import carb
 import omni.kit.app
 import omni.ui as ui
 import omni.usd
@@ -1706,11 +1708,28 @@ class PipeRouterPanel:
         """Viewport double-click. If a wire is selected and the click landed on THAT wire's
         routed tube (or one of its bundle branch segments), drop a waypoint exactly at the
         picked world point - appended in click order, so clicking points along the wire in
-        sequence builds the route order naturally."""
+        sequence builds the route order naturally.
+
+        Wrapped so a failure (e.g. a Kit-version quirk in the pick callback, or a stale
+        selection after a rebuild) surfaces a clear message + a full log entry instead of a
+        raw traceback in the console."""
+        try:
+            self._do_viewport_pick(world_xyz, hit_path)
+        except Exception as exc:  # noqa: BLE001
+            carb.log_error("[piperouter] drop-waypoint-on-double-click failed:\n"
+                           + traceback.format_exc())
+            try:
+                self._progress.text = (f"Could not drop a waypoint here: {exc}. "
+                                       "Use '+ Add waypoint' in the inspector instead.")
+            except Exception:  # noqa: BLE001
+                pass
+
+    def _do_viewport_pick(self, world_xyz, hit_path):
         if self._selected is None or self._selected >= len(self._wires):
             return
         w = self._wires[self._selected]
         tube = f"{scene_ops.ROUTES_SCOPE}/{w['name']}"
+        hit_path = str(hit_path or "")
         if not (hit_path == tube or hit_path.startswith(tube + "/")
                 or hit_path.startswith(tube + "_seg")):
             return   # double-clicked something other than the selected wire's tube
