@@ -71,6 +71,11 @@ _MINI_H = 22               # compact in-row buttons (S / E / X / Up / Dn)
 
 _DEFAULT_WEIGHT = 1.0      # neutral soft-constraint weight (used by "reset")
 
+# Kit authors these viewport cameras into the stage; we drop them from exported sessions
+# so re-opening the file doesn't spam "Updated /OmniverseKit_* to Sdf.SpecifierOver".
+_VIEWPORT_CAMERAS = ("OmniverseKit_Persp", "OmniverseKit_Front",
+                     "OmniverseKit_Top", "OmniverseKit_Right")
+
 
 def _abgr(rgb):
     r, g, b = (max(0, min(255, int(c * 255))) for c in rgb)
@@ -1129,10 +1134,34 @@ class PipeRouterPanel:
         try:
             scene_ops.write_session(stage, self._session_state())
             ok = stage.Export(path)
+            if ok:
+                self._strip_viewport_cameras(path)
             self._progress.text = (f"Saved session -> {path}" if ok
                                    else f"save failed: {path}")
         except Exception as exc:
             self._progress.text = f"save failed: {exc}"
+
+    @staticmethod
+    def _strip_viewport_cameras(usd_path):
+        """Remove Kit's OmniverseKit_* viewport cameras from a just-exported .usd file, in
+        place, by editing it as a flat Sdf layer. We edit the layer directly (not via a
+        stage) so instancing in the source scene is left untouched, and so the live stage's
+        own cameras are never disturbed."""
+        try:
+            from pxr import Sdf
+            layer = Sdf.Layer.FindOrOpen(usd_path)
+            if layer is None:
+                return
+            removed = False
+            for name in _VIEWPORT_CAMERAS:
+                if layer.GetPrimAtPath(f"/{name}"):
+                    del layer.rootPrims[name]
+                    removed = True
+            if removed:
+                layer.Save()
+        except Exception as exc:  # noqa: BLE001
+            carb.log_warn(f"[piperouter] could not strip viewport cameras "
+                          f"from {usd_path}: {exc}")
 
     def _do_load(self, path):
         if not path:
@@ -1177,6 +1206,7 @@ class PipeRouterPanel:
             tmp_src = os.path.join(tmpdir, "session_src.usd")
             tmp_usdz = os.path.join(tmpdir, "session.usdz")
             stage.Export(tmp_src)
+            self._strip_viewport_cameras(tmp_src)
             if not UsdUtils.CreateNewUsdzPackage(tmp_src, tmp_usdz):
                 self._progress.text = "usdz packaging failed"
                 return
