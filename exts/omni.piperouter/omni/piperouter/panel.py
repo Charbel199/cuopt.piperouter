@@ -21,7 +21,7 @@ from pxr import Tf, Usd
 
 from . import bom as bom_lib
 from . import bundles as bundle_lib
-from . import headings, hud as hud_mod, scene_ops, session_io, viewport_labels, waypoints, wire_library
+from . import headings, hud as hud_mod, scene_ops, session_io, viewport_labels, viewport_pick, waypoints, wire_library
 
 _WEIGHTS = ("surface", "bend", "thermal", "em", "smoothing")
 
@@ -98,6 +98,8 @@ class PipeRouterPanel:
         self._checklist_collapsed = {}  # bid -> bool: user-controlled collapsed state
         self._vp_labels = viewport_labels.ViewportOrderLabels()
         self._hud = hud_mod.ViewportHUD()
+        # double-click on the selected wire's tube -> drop a waypoint there
+        self._picker = viewport_pick.ViewportPicker(on_pick=self._on_viewport_pick)
         self._hud_visible = True
         self._window = ui.Window("PipeRouter", width=520, height=780)
         self._build()
@@ -807,14 +809,19 @@ class PipeRouterPanel:
             return 1.0
 
     def _scene_diag(self, stage):
-        """Bounding-box diagonal of the obstacle geometry, in STAGE units. Falls back to
-        ~1 m worth of stage units when there's no geometry yet (empty scene)."""
+        """Scene bounding-box diagonal in STAGE units. Uses /World's world bound — a single
+        cheap compute (no force-load, no per-mesh loop) so it's fine to call per refresh.
+        Falls back to ~1 m worth of stage units when the scene is empty."""
         try:
-            prims = scene_ops.list_collidable_meshes(stage)
-            b = scene_ops.compute_bounds(stage, prims) if prims else None
-            if b is not None:
-                d = b[1] - b[0]
-                return float((float(d[0]) ** 2 + float(d[1]) ** 2 + float(d[2]) ** 2) ** 0.5)
+            from pxr import Usd, UsdGeom
+            world = stage.GetPrimAtPath("/World")
+            if world and world.IsValid():
+                bb = UsdGeom.BBoxCache(Usd.TimeCode.Default(),
+                                       [UsdGeom.Tokens.default_, UsdGeom.Tokens.render])
+                rng = bb.ComputeWorldBound(world).ComputeAlignedRange()
+                if not rng.IsEmpty():
+                    d = rng.GetSize()
+                    return float((d[0] ** 2 + d[1] ** 2 + d[2] ** 2) ** 0.5)
         except Exception:
             pass
         return float(self._stage_inv(stage))   # ~1 m
@@ -1489,6 +1496,58 @@ class PipeRouterPanel:
         self._api.select_prim(path)  # auto-select so it can be dragged immediately
         self._schedule(inspector=True)
 
+    @staticmethod
+    def _snap_to_centerline(world_xyz, polyline_m, inv):
+        """Project a surface-hit world point onto the wire's centerline (its route polyline)
+        so a dropped waypoint sits in the MIDDLE of the tube, not on its surface. polyline_m
+        is in METERS; we scale it to stage units (×inv) to match world_xyz. Falls back to the
+        raw point if there's no polyline yet."""
+        import numpy as np
+        if not polyline_m or len(polyline_m) < 2:
+            return list(world_xyz)
+        P = np.asarray(polyline_m, dtype=float) * float(inv)   # meters -> stage units
+        q = np.asarray(world_xyz, dtype=float)
+        best, best_d = q, 1e18
+        for a, b in zip(P[:-1], P[1:]):
+            ab = b - a
+            L2 = float(ab @ ab)
+            t = 0.0 if L2 < 1e-12 else max(0.0, min(1.0, float((q - a) @ ab) / L2))
+            proj = a + t * ab
+            d = float(((q - proj) ** 2).sum())
+            if d < best_d:
+                best_d, best = d, proj
+        return [float(x) for x in best]
+
+    def _on_viewport_pick(self, world_xyz, hit_path):
+        """Viewport double-click. If a wire is selected and the click landed on THAT wire's
+        routed tube (or one of its bundle branch segments), drop a waypoint exactly at the
+        picked world point — appended in click order, so clicking points along the wire in
+        sequence builds the route order naturally."""
+        if self._selected is None or self._selected >= len(self._wires):
+            return
+        w = self._wires[self._selected]
+        tube = f"{scene_ops.ROUTES_SCOPE}/{w['name']}"
+        if not (hit_path == tube or hit_path.startswith(tube + "/")
+                or hit_path.startswith(tube + "_seg")):
+            return   # double-clicked something other than the selected wire's tube
+        stage = self._get_stage()
+        if stage is None:
+            return
+        # The pick lands on the tube SURFACE; snap it to the cable CENTERLINE (the route
+        # polyline) at that spot, so the waypoint sits in the middle of the wire.
+        center = self._snap_to_centerline(world_xyz, w.get("polyline"),
+                                          self._stage_inv(stage))
+        n = w["wp_counter"]
+        w["wp_counter"] += 1
+        path = f"{scene_ops.MARKERS_SCOPE}/{w['key']}_wp{n}"
+        scene_ops.spawn_waypoint_marker(stage, path, tuple(center), color=(0.1, 0.5, 0.9),
+                                         radius=self._marker_radius(stage) * 1.2)
+        w["waypoints"].append(path)
+        w.setdefault("wp_slots", []).append(len(self._wire_bundles(w)))
+        self._api.select_prim(path)
+        self._schedule(inspector=True, wires=True)
+        self._progress.text = f"waypoint dropped on {w['name']} at the double-clicked point"
+
     def _delete_waypoint(self, idx):
         if self._selected is None:
             return
@@ -1598,6 +1657,8 @@ class PipeRouterPanel:
         selection). Each wire <n> shows W<n>S at its start, W<n>.<k> above its k-th
         waypoint, and W<n>E at its end; each bundle <n> shows B<n>S at its start (merge)
         marker and B<n>E at its end (split) marker."""
+        if getattr(self, "_picker", None) is not None:
+            self._picker.enable()   # arm the double-click picker once the viewport exists (no-op after)
         vpl = getattr(self, "_vp_labels", None)
         if vpl is None:
             return
@@ -1629,18 +1690,17 @@ class PipeRouterPanel:
 
         vpl.update(items)
 
-    @staticmethod
-    def _stage_up_offset(stage):
-        """A small world-space offset along the stage up-axis, so labels float just
-        ABOVE their markers rather than sitting on them."""
+    def _stage_up_offset(self, stage):
+        """Small world-space offset along the stage up-axis so labels float JUST above their
+        markers — scene-relative (~2× the marker radius), so it stays tight to the point on
+        a 1 m harness or a big bay alike, instead of a fixed (too-high) distance."""
         try:
             from pxr import UsdGeom
             axis = UsdGeom.GetStageUpAxis(stage)
-            mpu = float(UsdGeom.GetStageMetersPerUnit(stage))
-            d = 0.12 / mpu if mpu > 1e-9 else 0.12  # ~12 cm above the marker, in stage units
+            d = self._marker_radius(stage) * 2.0   # just above the marker, in stage units
             return (0.0, d, 0.0) if axis == UsdGeom.Tokens.y else (0.0, 0.0, d)
         except Exception:
-            return (0.0, 0.0, 0.12)
+            return (0.0, 0.0, self._marker_radius(stage) * 2.0)
 
     # --------------------------------------------------------------- solving
     def _gather_wire(self, w, priority=0):
@@ -1921,6 +1981,9 @@ class PipeRouterPanel:
         if getattr(self, "_hud", None) is not None:
             self._hud.destroy()
             self._hud = None
+        if getattr(self, "_picker", None) is not None:
+            self._picker.destroy()
+            self._picker = None
         if self._window:
             self._window.destroy()
             self._window = None
