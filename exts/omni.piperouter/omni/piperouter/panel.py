@@ -926,14 +926,25 @@ class PipeRouterPanel:
         Falls back to ~1 m worth of stage units when the scene is empty."""
         try:
             from pxr import Usd, UsdGeom
-            world = stage.GetPrimAtPath("/World")
-            if world and world.IsValid():
-                bb = UsdGeom.BBoxCache(Usd.TimeCode.Default(),
-                                       [UsdGeom.Tokens.default_, UsdGeom.Tokens.render])
-                rng = bb.ComputeWorldBound(world).ComputeAlignedRange()
+            bb = UsdGeom.BBoxCache(Usd.TimeCode.Default(),
+                                   [UsdGeom.Tokens.default_, UsdGeom.Tokens.render])
+            # prefer /World (our sample scenes); fall back to the asset's defaultPrim
+            # (imported CAD like the engine has no /World), then the whole stage.
+            targets = []
+            w = stage.GetPrimAtPath("/World")
+            if w and w.IsValid():
+                targets.append(w)
+            dp = stage.GetDefaultPrim()
+            if dp and dp.IsValid():
+                targets.append(dp)
+            targets.append(stage.GetPseudoRoot())
+            for prim in targets:
+                rng = bb.ComputeWorldBound(prim).ComputeAlignedRange()
                 if not rng.IsEmpty():
                     d = rng.GetSize()
-                    return float((d[0] ** 2 + d[1] ** 2 + d[2] ** 2) ** 0.5)
+                    diag = float((d[0] ** 2 + d[1] ** 2 + d[2] ** 2) ** 0.5)
+                    if diag > 1e-9:
+                        return diag
         except Exception:
             pass
         return float(self._stage_inv(stage))   # ~1 m

@@ -299,8 +299,10 @@ class PipeRouterExtension(omni.ext.IExt):
             step = (len(centers) // cap + 1) if len(centers) > cap else 1
 
             if mode == "occupancy":
+                # ~0.85*cell so beads nearly fill their voxel and the overlay reads as a
+                # continuous occupied shell instead of sparse floating dots.
                 scene_ops.author_points(stage, scene_ops.DEBUG_SCOPE + "/occ",
-                                        centers[::step], size=cell_stage * 0.4,
+                                        centers[::step], size=cell_stage * 0.85,
                                         color=(0.2, 0.6, 1.0))
             else:
                 v = vals[mask]
@@ -312,7 +314,7 @@ class PipeRouterExtension(omni.ext.IExt):
                     colors = np.stack([t01, 1.0 - t01, np.full_like(t01, 0.7)], axis=1)
                 scene_ops.author_colored_points(
                     stage, scene_ops.DEBUG_SCOPE + f"/{mode}",
-                    centers[::step], colors[::step], size=cell_stage * 0.5)
+                    centers[::step], colors[::step], size=cell_stage * 0.8)
 
             carb.log_info(f"[piperouter] overlay '{mode}': {len(ijk)} cells "
                           f"(showing {len(centers[::step])})")

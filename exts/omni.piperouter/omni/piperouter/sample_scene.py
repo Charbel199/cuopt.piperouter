@@ -83,7 +83,12 @@ def build_sample_scene(stage):
 # radiator, battery, ECUs, ABS, firewall halves, chassis rails) with thermal/EM
 # sources, and 14 wires/pipes spanning the bay using ALL wire + tube types. Built
 # under the SAME root as the sample scene, so the two buttons swap cleanly.
-COMPLEX_SCALE = 6.0
+# Physical size in METRES per base-layout unit. The base layout is ~3.4 units wide, so
+# COMPLEX_SCALE = 1.5 -> a ~5 m vehicle-front footprint (realistic; was 6.0 = ~20 m). This
+# is about the smallest that still lets the stiff pipes route through the tight corridors:
+# shrinking further makes the fixed physical bend radii too large for the gaps and several
+# pipes can no longer route (verified — at 1.2 only 9/14 route).
+COMPLEX_SCALE = 1.5
 
 # (name, center, size, color, temp_c, em) — base units (×COMPLEX_SCALE on build).
 COMPLEX_BOXES = [

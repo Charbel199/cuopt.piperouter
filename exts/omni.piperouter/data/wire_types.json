@@ -66,6 +66,32 @@
       "color": [0.1, 0.55, 0.75]
     },
     {
+      "id": "cooling_main_24",
+      "label": "Cooling main 23.7 mm",
+      "kind": "pipe",
+      "outer_diameter_mm": 23.7,
+      "inner_diameter_mm": 20.7,
+      "min_bend_radius_mm": 120.0,
+      "cost_per_m": 7.20,
+      "mass_per_m_kg": 0.44,
+      "max_temp_c": 120,
+      "em_sensitivity": 0.0,
+      "color": [0.15, 0.45, 0.95]
+    },
+    {
+      "id": "cooling_branch_15",
+      "label": "Cooling branch 15.2 mm",
+      "kind": "pipe",
+      "outer_diameter_mm": 15.2,
+      "inner_diameter_mm": 12.2,
+      "min_bend_radius_mm": 76.0,
+      "cost_per_m": 5.00,
+      "mass_per_m_kg": 0.25,
+      "max_temp_c": 120,
+      "em_sensitivity": 0.0,
+      "color": [0.25, 0.75, 0.85]
+    },
+    {
       "id": "brake_line_6",
       "label": "Brake line 6 mm",
       "kind": "pipe",
