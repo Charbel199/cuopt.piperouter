@@ -1531,9 +1531,10 @@ class PipeRouterPanel:
                 "Grid vs smooth path",
                 "Soft-cost terrain",
                 "Bend-radius heatmap",
+                "Octree lattice (adaptive cells + band)",
             )
             _WIRE_DEBUG_IDS = (
-                "none", "cells", "raw_path", "cost_terrain", "bend_radius",
+                "none", "cells", "raw_path", "cost_terrain", "bend_radius", "octree",
             )
             # reflect the live debug view for this wire (persists across reroutes)
             cur = (self._active_debug[1]

@@ -56,3 +56,30 @@ def test_rrt_is_deterministic(empty_stack):
     p1 = planners.RRTGlobal().plan(s, wire, {}, 26, (0, 5, 1), (9, 5, 1), None, 0.0, None, None)
     p2 = planners.RRTGlobal().plan(s, wire, {}, 26, (0, 5, 1), (9, 5, 1), None, 0.0, None, None)
     assert p1 == p2 and p1 is not None        # fixed seed -> identical route
+
+
+def test_octree_lattice_respects_prior_routes(empty_stack):
+    # the cached octree is geometry-only, so prior wires (extra_obstacles) must still be
+    # avoided by the FINE lattice pass — this is the correctness guarantee for Route All.
+    s = empty_stack
+    wire = _wire()
+    a, b = (0, 5, 1), (9, 5, 1)
+    extra = np.zeros(s.occupancy.shape, dtype=bool)
+    extra[5, :, :] = True
+    extra[5, 8, :] = False                    # a prior-route wall with a gap at y=8
+    olt = planners.OctreeLatticeGlobal()
+    cells = olt.plan(s, wire, {"surface": 1.0, "bend": 1.0}, 26, a, b, extra, 0.0, None, None)
+    assert cells is not None
+    for c in cells:
+        assert not extra[tuple(c)], f"route crossed a prior-route cell at {c}"
+
+
+def test_octree_cache_reused_across_wires(empty_stack):
+    # second plan on the same stack reuses the cached geometry octree (one entry per radius)
+    s = empty_stack
+    s.occupancy[5, :8, :] = 1
+    olt = planners.OctreeLatticeGlobal()
+    olt.plan(s, _wire(), {"bend": 1.0}, 26, (0, 5, 1), (9, 5, 1), None, 0.0, None, None)
+    assert "_octree_cache" in s.__dict__ and len(s.__dict__["_octree_cache"]) == 1
+    olt.plan(s, _wire(), {"bend": 1.0}, 26, (0, 6, 1), (9, 6, 1), None, 0.0, None, None)
+    assert len(s.__dict__["_octree_cache"]) == 1   # same radius -> no rebuild

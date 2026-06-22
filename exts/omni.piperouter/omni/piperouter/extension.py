@@ -426,6 +426,57 @@ class PipeRouterExtension(omni.ext.IExt):
                                               pos_scale=inv, width=dia_stage)
                 carb.log_info(f"[piperouter] wire debug 'bend_radius': min={min_bend}mm")
 
+            elif mode == "octree":
+                if grids is None:
+                    return "[piperouter] octree: route first (no voxel grids yet)"
+                from . import grid_io, octree_viz
+                scene_ops.set_all_routes_visible(stage)   # show the route inside the octree
+                gbmin, cell, res, occ, _sd, _th, _em = grids
+                gbmin = np.asarray(gbmin, dtype=np.float64)
+                # blocked = occupancy (clearance already baked) dilated by the wire radius,
+                # matching what the planner's octree sees.
+                rad_cells = int(round((_real_d * 0.5) / float(cell)))
+                blocked = occ.astype(bool)
+                if rad_cells > 0:
+                    blocked = grid_io.dilate_mask(blocked, rad_cells).astype(bool)
+                leaves, leaf_of = octree_viz.build_octree(blocked)
+                if not leaves:
+                    return "[piperouter] octree: no free space in the grid"
+                # leaf wireframe boxes, coloured by size: small (fine, near surfaces) = warm,
+                # big (open air) = cool — so the adaptive resolution is obvious at a glance.
+                sizes = [max(l[1] - l[0], l[3] - l[2], l[5] - l[4]) for l in leaves]
+                smax = max(sizes)
+                boxes, cols = [], []
+                for l, sz in zip(leaves, sizes):
+                    mn = (gbmin + np.array([l[0], l[2], l[4]]) * cell) * inv
+                    mx = (gbmin + np.array([l[1], l[3], l[5]]) * cell) * inv
+                    boxes.append((tuple(mn), tuple(mx)))
+                    t = (sz - 1) / max(smax - 1, 1)        # 0 = finest, 1 = biggest
+                    cols.append((1.0 - 0.8 * t, 0.35 + 0.55 * t, 0.1 + 0.9 * t))
+                scene_ops.author_box_wireframe(
+                    stage, f"{scene_ops.DEBUG_SCOPE}/octree_{wire_name}", boxes,
+                    colors=cols, width=float(cell) * inv * 0.04)
+                # the band the fine lattice actually searches (needs the routed endpoints)
+                poly = wire.get("polyline")
+                band_n = 0
+                if poly and len(poly) >= 2:
+                    p0 = (np.asarray(poly[0], dtype=np.float64) - gbmin) / float(cell)
+                    p1 = (np.asarray(poly[-1], dtype=np.float64) - gbmin) / float(cell)
+                    _corr, band_mask = octree_viz.corridor_and_band(
+                        blocked, leaves, leaf_of, p0, p1, band=4)
+                    if band_mask is not None:
+                        ijk = np.argwhere(band_mask).astype(np.float64)
+                        step = (len(ijk) // 60000 + 1)
+                        centres = (gbmin + (ijk[::step] + 0.5) * float(cell)) * inv
+                        scene_ops.author_points(
+                            stage, f"{scene_ops.DEBUG_SCOPE}/octband_{wire_name}",
+                            centres, size=float(cell) * inv * 0.3, color=(0.2, 0.55, 0.95))
+                        band_n = int(band_mask.sum())
+                full = int(np.prod([int(r) for r in res]))
+                carb.log_info(f"[piperouter] wire debug 'octree': {len(leaves)} leaves, "
+                              f"band {band_n}/{full} cells "
+                              f"({100.0 * band_n / max(full, 1):.1f}% searched)")
+
             return None
         except Exception as exc:
             carb.log_error(f"[piperouter] wire debug failed: {exc}")

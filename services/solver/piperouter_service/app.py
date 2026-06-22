@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
+import sys
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
@@ -13,6 +15,24 @@ from .schemas import RouteOut, SolveAllBody, SolveAllOut, SolveBody
 from .session_store import FilesystemSessionStore
 
 _DEFAULT_WIRE_TYPES = Path(__file__).resolve().parents[1] / "wire_types.json"
+
+
+def _setup_logging() -> None:
+    """Route the 'piperouter' logger (SSSP-backend line, planner/optimizer warnings, etc.)
+    to the container's stdout so it shows in `docker logs`. By default uvicorn only
+    configures its own loggers, so ours otherwise vanished. Level via PIPEROUTER_LOG_LEVEL
+    (default INFO)."""
+    lvl = getattr(logging, os.environ.get("PIPEROUTER_LOG_LEVEL", "INFO").upper(), logging.INFO)
+    log = logging.getLogger("piperouter")
+    log.setLevel(lvl)
+    if not any(getattr(h, "_piperouter", False) for h in log.handlers):
+        h = logging.StreamHandler(sys.stdout)
+        h._piperouter = True   # marker so reloads don't stack duplicate handlers
+        # messages already carry the "[piperouter]" tag, so the format stays minimal
+        h.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s",
+                                         datefmt="%H:%M:%S"))
+        log.addHandler(h)
+    log.propagate = False      # we emit directly; don't double-log via the root logger
 
 
 def _backend_name() -> str:
@@ -83,6 +103,7 @@ def app_factory(store: FilesystemSessionStore, wire_types_path: Path) -> FastAPI
     return app
 
 
+_setup_logging()
 app = app_factory(
     FilesystemSessionStore(),
     Path(os.environ.get("WIRE_TYPES_PATH", _DEFAULT_WIRE_TYPES)),

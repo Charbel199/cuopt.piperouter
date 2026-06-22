@@ -244,6 +244,41 @@ def author_box_mesh(stage, path, center, size, color=(0.5, 0.5, 0.5)):
     return mesh
 
 
+_BOX_EDGES = ((0, 1), (1, 2), (2, 3), (3, 0), (4, 5), (5, 6), (6, 7), (7, 4),
+              (0, 4), (1, 5), (2, 6), (3, 7))
+
+
+def author_box_wireframe(stage, path, boxes, colors=None, color=(0.3, 0.7, 1.0),
+                         width=0.01):
+    """See-through wireframe boxes (12 edges each) as ONE BasisCurves — used to show the
+    octree leaves without occluding the scene. `boxes` = list of (min_xyz, max_xyz) in
+    STAGE units; `colors` (optional) = per-box RGB."""
+    crv = UsdGeom.BasisCurves.Define(stage, path)
+    pts, counts, disp = [], [], []
+    for bi, (mn, mx) in enumerate(boxes):
+        x0, y0, z0 = (float(v) for v in mn)
+        x1, y1, z1 = (float(v) for v in mx)
+        corners = [(x0, y0, z0), (x1, y0, z0), (x1, y1, z0), (x0, y1, z0),
+                   (x0, y0, z1), (x1, y0, z1), (x1, y1, z1), (x0, y1, z1)]
+        col = colors[bi] if colors is not None else color
+        cv = Gf.Vec3f(float(col[0]), float(col[1]), float(col[2]))
+        for a, b in _BOX_EDGES:
+            pts.append(Gf.Vec3f(*corners[a]))
+            pts.append(Gf.Vec3f(*corners[b]))
+            counts.append(2)
+            disp.append(cv)               # one colour per edge (uniform interpolation)
+    crv.GetPointsAttr().Set(pts)
+    crv.GetCurveVertexCountsAttr().Set(counts)
+    crv.GetTypeAttr().Set(UsdGeom.Tokens.linear)
+    crv.GetWrapAttr().Set(UsdGeom.Tokens.nonperiodic)
+    crv.GetWidthsAttr().Set([float(width)] * len(pts))
+    crv.SetWidthsInterpolation(UsdGeom.Tokens.vertex)
+    pv = crv.GetDisplayColorPrimvar()
+    pv.Set(disp)
+    pv.SetInterpolation(UsdGeom.Tokens.uniform)
+    return crv
+
+
 def _author_blob_cloud(stage, path, points, size, colors=None, color=(0.2, 0.6, 1.0)):
     """Render a point cloud as short fat BasisCurves stubs — one tiny 2-vertex linear
     curve (width = size) per point. We use curves, NOT UsdGeom.Points, because the RTX

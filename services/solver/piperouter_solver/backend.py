@@ -1,6 +1,25 @@
 from __future__ import annotations
 
+import logging
+
 import numpy as np
+
+_log = logging.getLogger("piperouter")
+_sssp_backend_logged = False
+
+
+def _log_sssp_backend(name):
+    """Announce the SSSP backend ONCE, so a silent cuGraph->scipy (GPU->CPU) fallback is
+    visible in the logs instead of quietly costing ~600 ms/wire."""
+    global _sssp_backend_logged
+    if not _sssp_backend_logged:
+        _sssp_backend_logged = True
+        if name == "cugraph":
+            _log.info("[piperouter] SSSP backend: cuGraph (GPU)")
+        else:
+            _log.warning("[piperouter] SSSP backend: scipy Dijkstra (CPU) — cuGraph not "
+                         "available; route search will be much slower. Install "
+                         "cugraph-cu12 in the solver image for the GPU path.")
 
 
 def _to_host(a):
@@ -36,8 +55,10 @@ def shortest_path(src, dst, weight, n_nodes, source_id, sink_id):
         import cudf  # noqa: F401
         import cugraph  # noqa: F401
 
+        _log_sssp_backend("cugraph")
         return _cugraph_sssp(src, dst, weight, n_nodes, source_id, sink_id)
     except Exception:
+        _log_sssp_backend("scipy")
         return _scipy_sssp(src, dst, weight, n_nodes, source_id, sink_id)
 
 
