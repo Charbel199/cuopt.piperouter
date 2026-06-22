@@ -15,7 +15,7 @@ SCHEMA_VERSION = 1
 _WIRE_KEYS = (
     "key", "name", "type_index", "type_id", "weights", "waypoints", "wp_slots",
     "wp_counter", "start_head_idx", "end_head_idx", "locked",
-    "status", "reason", "length_m", "cost", "polyline", "cells", "raw_polyline",
+    "status", "reason", "note", "length_m", "cost", "polyline", "cells", "raw_polyline",
 )
 _BUNDLE_KEYS = (
     "id", "name", "kind", "type_index", "type_id", "members", "merge_marker",

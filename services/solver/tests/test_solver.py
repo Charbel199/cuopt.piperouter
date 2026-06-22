@@ -108,7 +108,7 @@ def test_route_interior_never_enters_clearance_zone():
         assert not blocked[c], f"route cell {c} is inside the clearance keep-out"
 
 
-def test_clearance_burying_endpoint_fails(empty_stack):
+def test_clearance_burying_endpoint_relocates(empty_stack):
     s = empty_stack
     s.occupancy[5, :, :] = 1  # wall at x=5; both endpoints on the x<5 side
     start = tuple(s.frame.grid_to_world((4, 5, 1)))  # one cell from the wall
@@ -116,10 +116,13 @@ def test_clearance_burying_endpoint_fails(empty_stack):
     # clearance 0: start (x=4) is free -> routes on the near side
     assert Solver().route_one(s, RouteRequest(wire=_wire(), start=start, end=end,
                                               connectivity=26, clearance_m=0.0)).status == "routed"
-    # clearance 0.25 m dilates the wall ~3 cells, burying the start in the clearance
-    # band (not the mesh) -> endpoint not force-freed -> no_path
-    assert Solver().route_one(s, RouteRequest(wire=_wire(), start=start, end=end,
-                                              connectivity=26, clearance_m=0.25)).status == "no_path"
+    # clearance 0.25 m dilates the wall ~3 cells, burying the start in the clearance band.
+    # The buried-endpoint rescue relocates it to the nearest open cell and routes anyway,
+    # flagging the move with a note (instead of the old hard no_path).
+    res = Solver().route_one(s, RouteRequest(wire=_wire(), start=start, end=end,
+                                             connectivity=26, clearance_m=0.25))
+    assert res.status == "routed"
+    assert res.note and "buried" in res.note.lower()
 
 
 def test_melt_cutoff_blocks_hot_corridor(empty_stack):

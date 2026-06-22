@@ -60,6 +60,7 @@ _DOT = {  # status -> ABGR color for the ● status dot
 _PRIMARY = 0xFF2A7DBE
 _OK = 0xFF33CC33
 _BAD = 0xFF3333CC
+_WARN = 0xFF1E96E6         # amber/orange (non-fatal warnings, e.g. relocated endpoint)
 _ACCENT = 0xFF76B900       # NVIDIA green (captions, selection)
 _HINT_BG = 0xFF2B2B2B      # empty-state card background
 _DIVIDER = 0xFF333333
@@ -905,7 +906,7 @@ class PipeRouterPanel:
                 "locked": False, "polyline": None, "status": "unrouted",
                 "length_m": 0.0, "cost": 0.0, "combo": None, "name_model": None,
                 "_swatch": None, "start_head_idx": 0, "end_head_idx": 0, "reason": "",
-                "cells": [], "raw_polyline": None}
+                "note": "", "cells": [], "raw_polyline": None}
 
     @staticmethod
     def _stage_inv(stage):
@@ -1032,8 +1033,8 @@ class PipeRouterPanel:
             ti = max(0, min(ti, len(self._types) - 1))
             w = self._new_wire(wd.get("key", f"wire_{i}"), wd.get("name", f"wire_{i}"), ti)
             for k in ("weights", "waypoints", "wp_slots", "wp_counter", "start_head_idx",
-                      "end_head_idx", "locked", "status", "reason", "length_m", "cost",
-                      "polyline", "cells", "raw_polyline"):
+                      "end_head_idx", "locked", "status", "reason", "note", "length_m",
+                      "cost", "polyline", "cells", "raw_polyline"):
                 if k in wd:
                     w[k] = wd[k]
             self._wires.append(w)
@@ -1299,12 +1300,17 @@ class PipeRouterPanel:
                             style={"background_color": _abgr(color), "border_radius": 2,
                                    "border_width": 1, "border_color": 0xFF222222})
                         # status chip (green routed / red no-path / blue locked / grey);
-                        # hover a no-path chip to see WHY it failed
+                        # hover a no-path chip to see WHY it failed. A routed wire with a
+                        # warning note (e.g. a relocated buried endpoint) shows amber.
                         chip_tip = status
+                        chip_color = _DOT.get(status, _DOT["unrouted"])
                         if w["status"] == "no_path" and w.get("reason"):
                             chip_tip = f"no path: {w['reason']}"
+                        elif status == "routed" and w.get("note"):
+                            chip_tip = w["note"]
+                            chip_color = _WARN
                         ui.Rectangle(width=12, height=12, tooltip=chip_tip,
-                                     style={"background_color": _DOT.get(status, _DOT["unrouted"]),
+                                     style={"background_color": chip_color,
                                             "border_radius": 6})
                         nm = ui.StringField(width=90)
                         nm.model.set_value(w["name"])
@@ -1403,6 +1409,8 @@ class PipeRouterPanel:
             if w["status"] == "no_path" and w.get("reason"):
                 ui.Label(f"No path: {w['reason']}", word_wrap=True,
                          style={"color": _BAD})
+            elif w.get("note"):   # routed, but with a warning (e.g. relocated endpoint)
+                ui.Label(w["note"], word_wrap=True, style={"color": _WARN})
             # --- constraints group
             ui.Spacer(height=2)
             with ui.HStack(height=0):
@@ -1999,6 +2007,7 @@ class PipeRouterPanel:
                 w["status"] = r["status"]
                 w["polyline"] = r.get("polyline") if r["status"] == "routed" else None
                 w["reason"] = r.get("reason", "") if r["status"] != "routed" else ""
+                w["note"] = r.get("note", "")          # buried-endpoint relocation warning
                 w["cells"] = r.get("cells", [])
                 w["raw_polyline"] = r.get("raw_polyline") if r["status"] == "routed" else None
         for b_row in (bom or []):
@@ -2061,6 +2070,7 @@ class PipeRouterPanel:
         w["status"] = result["status"] if result else "no_path"
         w["polyline"] = result.get("polyline") if w["status"] == "routed" else None
         w["reason"] = result.get("reason", "") if result and w["status"] != "routed" else ""
+        w["note"] = result.get("note", "") if result else ""
         w["cells"] = result.get("cells", []) if result else []
         w["raw_polyline"] = result.get("raw_polyline") if result and w["status"] == "routed" else None
         if bom_row:

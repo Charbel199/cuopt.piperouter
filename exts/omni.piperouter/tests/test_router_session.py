@@ -64,28 +64,46 @@ def test_clearance_affects_route_all(solver_server):
 
 
 def test_no_path_reason_flows_through_http(solver_server):
-    # a wire whose end is buried in a solid block -> no_path with an explanatory
-    # reason that survives the solver schema + HTTP round-trip into the BOM row.
+    # a wall spanning the FULL cross-section partitions the bay (pad_frac=0 -> no free
+    # border to sneak around) -> genuine no_path, with a reason that survives the solver
+    # schema + HTTP round-trip into the BOM row.
     from pxr import Usd, UsdGeom
     stage = Usd.Stage.CreateInMemory()
     UsdGeom.SetStageMetersPerUnit(stage, 1.0)
     UsdGeom.Xform.Define(stage, "/World")
-    scene_ops.author_box_mesh(stage, "/World/block", (1.0, 0.5, 0.5), (0.6, 0.6, 0.6))
-    start, end = (0.1, 0.5, 0.5), (1.0, 0.5, 0.5)  # end sits inside the block
+    scene_ops.author_box_mesh(stage, "/World/wall", (1.0, 0.5, 0.5), (0.2, 2.0, 2.0))
+    start, end = (0.2, 0.5, 0.5), (1.8, 0.5, 0.5)  # opposite sides of the wall, both open
     scene_ops.spawn_marker(stage, f"{scene_ops.MARKERS_SCOPE}/b_start", start, radius=0.05)
     scene_ops.spawn_marker(stage, f"{scene_ops.MARKERS_SCOPE}/b_end", end, radius=0.05)
 
     base, grid_dir = solver_server
     session = RouterSession(grid_dir=grid_dir, solver_url=base)
-    session.voxelize_scene(stage, "nb", resolution=32)
+    session.voxelize_scene(stage, "nb", resolution=32, pad_frac=0.0)
     spec = wire_library.as_spec(wire_library.by_id(wire_library.load_wire_library(), "sig_can"))
-    wire = {"name": "buried", "spec": spec, "start": list(start), "end": list(end),
+    wire = {"name": "blocked", "spec": spec, "start": list(start), "end": list(end),
             "connectivity": 26}
     results, bom = session.route_all(stage, "nb", [wire])
 
     assert results[0]["status"] == "no_path"
     assert results[0]["reason"]            # reason present in the HTTP result
     assert bom[0]["reason"]                # ...and carried into the BOM row
+
+
+def test_relocation_note_flows_through_http(solver_server, cube_stage):
+    # END buried in the cube centre, START in open space (pad_frac=1.0 -> room to route):
+    # the buried end relocates to the nearest open point and routes, and the (non-fatal)
+    # note must survive the HTTP round-trip into the result.
+    base, grid_dir = solver_server
+    stage = cube_stage  # solid box at (0.5,0.5,0.5), half 0.2
+    session = RouterSession(grid_dir=grid_dir, solver_url=base)
+    session.voxelize_scene(stage, "rb", resolution=24, pad_frac=1.0)
+    spec = wire_library.as_spec(wire_library.by_id(wire_library.load_wire_library(), "sig_can"))
+    wire = {"name": "relocated", "spec": spec, "start": [0.0, 0.5, 0.5],
+            "end": [0.5, 0.5, 0.5], "connectivity": 26}   # end at the cube centre
+    results, _bom = session.route_all(stage, "rb", [wire])
+
+    assert results[0]["status"] == "routed"          # rescued instead of failing
+    assert "buried" in results[0].get("note", "").lower()   # note survived the round-trip
 
 
 def test_selected_algorithm_flows_through_http(solver_server, cube_stage):

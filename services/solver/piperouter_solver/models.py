@@ -99,6 +99,9 @@ class RouteResult:
     cells: list = field(default_factory=list)      # occupied (i,j,k) for obstacle reuse
     reason: str = ""             # human-readable explanation when status == "no_path"
     raw_polyline: list = field(default_factory=list)  # grid path before smoothing
+    # non-fatal warning on an otherwise-routed wire (e.g. a buried endpoint was relocated
+    # to the nearest open space). Shown in the panel in red while the route still stands.
+    note: str = ""
 
 
 @dataclass

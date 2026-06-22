@@ -1,10 +1,45 @@
 from __future__ import annotations
 
+from collections import deque
+
 import numpy as np
 
-from . import fields, optimizers, planners
+from . import optimizers, planners
 from .lattice import ExpandedLatticeBuilder, LatticeBuilder, diagnose_no_path
 from .models import RouteRequest, RouteResult, SolveReport
+
+# 6-neighbour steps for the nearest-free BFS used to rescue a buried endpoint.
+_BFS_STEPS = ((1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1))
+
+
+def _in_bounds(blocked, c):
+    nx, ny, nz = blocked.shape
+    return 0 <= c[0] < nx and 0 <= c[1] < ny and 0 <= c[2] < nz
+
+
+def _nearest_free_cell(blocked, cell):
+    """Nearest free cell to `cell` by breadth-first (6-connected) expansion through the
+    blocked grid — used to relocate a START/END that's buried inside an obstacle to the
+    closest open space. Returns the cell (the input cell if already free) or None if the
+    whole grid is blocked. Clamps an out-of-bounds input into the grid first."""
+    nx, ny, nz = blocked.shape
+    start = (min(max(int(cell[0]), 0), nx - 1),
+             min(max(int(cell[1]), 0), ny - 1),
+             min(max(int(cell[2]), 0), nz - 1))
+    if not blocked[start]:
+        return start
+    seen = {start}
+    q = deque([start])
+    while q:
+        i, j, k = q.popleft()
+        for di, dj, dk in _BFS_STEPS:
+            n = (i + di, j + dj, k + dk)
+            if _in_bounds(blocked, n) and n not in seen:
+                if not blocked[n]:
+                    return n           # first free cell reached = nearest (by hop count)
+                seen.add(n)
+                q.append(n)
+    return None
 
 
 class Solver:
@@ -23,6 +58,37 @@ class Solver:
         optimizer = optimizers.make_local(getattr(req, "local_optimizer", "fibre"))
         waypts = [req.start, *req.waypoints, req.end]
         cell_seq = [frame.world_to_grid(p) for p in waypts]
+
+        # Buried-endpoint rescue: if START/END sits inside GEOMETRY (the wire-radius +
+        # clearance dilated occupancy — what the user sees as "occupancy"), relocate it to
+        # the NEAREST routable cell instead of failing. We trigger ONLY on geometry/
+        # clearance burial — an endpoint blocked solely by a melt (over-temp) keep-out or a
+        # prior route is left alone so its real no_path reason still surfaces. The marker
+        # stays put; the tube ends at the open point and the wire carries a (red) note.
+        geo_blocked = stack.dilate_occupancy(req.wire.radius_m + req.clearance_m).astype(bool)
+        blocked = planners.blocked_mask(stack, req.wire, req.clearance_m, extra_obstacles)
+        notes: list[str] = []
+        start_world = np.asarray(req.start, dtype=np.float64)
+        end_world = np.asarray(req.end, dtype=np.float64)
+
+        def _rescue(cell, marker_world, label):
+            c = tuple(int(v) for v in cell)
+            if not (_in_bounds(geo_blocked, c) and geo_blocked[c]):
+                return cell, marker_world, None      # not buried in geometry -> leave as-is
+            free = _nearest_free_cell(blocked, cell)  # nearest cell valid for routing
+            if free is None:
+                return cell, marker_world, None      # nothing free anywhere -> planner fails
+            w = np.asarray(frame.grid_to_world(free), dtype=np.float64)
+            dist_mm = float(np.linalg.norm(w - marker_world)) * 1000.0
+            return (free, w,
+                    f"{label} is buried in an obstacle — routed to the nearest open point "
+                    f"({dist_mm:.0f} mm away)")
+
+        cell_seq[0], start_world, n0 = _rescue(cell_seq[0], start_world, "Start")
+        cell_seq[-1], end_world, n1 = _rescue(cell_seq[-1], end_world, "End")
+        for n in (n0, n1):
+            if n:
+                notes.append(n)
 
         all_cells: list[tuple[int, int, int]] = []
         wp_cell_idx: list[int] = []   # index in all_cells of each waypoint's cell
@@ -76,12 +142,14 @@ class Solver:
             if k < len(req.waypoints):
                 cell_world[ci] = np.asarray(req.waypoints[k], dtype=np.float64)
 
-        pts = [np.asarray(req.start, dtype=np.float64)]
+        # Anchor to the markers — or, when an endpoint was buried, to the open point we
+        # relocated it to (start_world / end_world), so the tube ends in free space.
+        pts = [start_world]
         flags = [True]
         for j, p in enumerate(cell_world):
             pts.append(p)
             flags.append(j in wpset)
-        pts.append(np.asarray(req.end, dtype=np.float64))
+        pts.append(end_world)
         flags.append(True)
 
         polyline, fixed_flags = [], []
@@ -101,12 +169,7 @@ class Solver:
         # is the strength knob (0 -> pass-through raw path for the smoothing-based ones).
         strength = float(req.weights.get("smoothing", 1.0))
         if len(polyline) >= 3:
-            blocked = (
-                stack.dilate_occupancy(req.wire.radius_m + req.clearance_m).astype(bool)
-                | fields.melt_mask(stack, req.wire)
-            )
-            if extra_obstacles is not None:
-                blocked |= np.asarray(extra_obstacles, dtype=bool)
+            # same prohibited voxels the planner/relocation used
             polyline = optimizer.optimize(
                 polyline, frame, blocked, req.wire,
                 req.start_heading, req.end_heading, strength, fixed_idx)
@@ -117,7 +180,7 @@ class Solver:
         return RouteResult(
             wire_id=req.wire.id, status="routed",
             polyline=polyline, length_m=length, cells=all_cells,
-            raw_polyline=raw_polyline,
+            raw_polyline=raw_polyline, note="; ".join(notes),
         )
 
     def route_all(self, stack, requests: list[RouteRequest]) -> SolveReport:

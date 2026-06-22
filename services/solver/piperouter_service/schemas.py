@@ -84,6 +84,7 @@ class RouteOut(BaseModel):
     polyline: list[list[float]] = Field(default_factory=list)
     length_m: float = 0.0
     reason: str = ""
+    note: str = ""             # non-fatal warning on a routed wire (e.g. buried endpoint)
     cells: list[list[int]] = Field(default_factory=list)       # voxel (i,j,k) path
     raw_polyline: list[list[float]] = Field(default_factory=list)  # pre-smoothing grid path
 
