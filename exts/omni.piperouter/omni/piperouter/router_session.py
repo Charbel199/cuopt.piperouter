@@ -41,6 +41,8 @@ class RouterSession:
         self.last_stats = {}      # stats from the last compute_grids (for logging/UI)
         self.last_grids = None    # (bounds_min, cell, res, occ, thermal, em) for views/overlay
         self.mpu = 1.0            # meters per stage unit (set in compute_grids)
+        self.last_clearance_m = 0.0   # safety clearance (set in compute_grids; sent per route,
+                                      # no longer baked into the grid)
         # selected routing algorithms (sent to the solver in every route request)
         self.global_planner = "lattice"
         self.local_optimizer = "fibre"
@@ -80,10 +82,11 @@ class RouterSession:
 
     def compute_grids(self, stage, resolution=64, pad_frac=0.05, clearance_m=0.0):
         """Read the stage and build the four voxel grids (occupancy, surface distance,
-        thermal, EM) IN MEMORY. The safety clearance is BAKED INTO the occupancy here
-        (occupied cells dilated by round(clearance/cell)), so the single saved grid is
-        the prohibited-voxel set used by the router AND shown by the overlay/2D views —
-        one source of truth. Shared by voxelize_scene and the debug overlay.
+        thermal, EM) IN MEMORY. occupancy is the RAW mesh (clearance is NOT baked in — the
+        solver applies it as a relaxable band, waived around endpoints, so it can tell a
+        real mesh from a clearance halo). `clearance_m` is remembered for the route requests
+        and for re-dilating the overlay/2D views at display time. Shared by voxelize_scene
+        and the debug overlay.
 
         UNITS: the solver works in METERS. The stage may use any metersPerUnit (cm by
         default in Omniverse, mm for many CAD imports), so all geometry read from the
@@ -118,12 +121,12 @@ class RouterSession:
         occ, sd = voxelizer.voxelize(pts, idx, gbmin, cell, res)
         t_vox = time.perf_counter()
 
-        # BAKE the safety clearance into the occupancy: grow prohibited voxels by
-        # round(clearance/cell). This IS the keep-out the router avoids and the views
-        # show — change clearance -> more prohibited voxels -> re-solve.
-        clearance_cells = int(float(clearance_m) / cell + 0.5 + 1e-9)
-        if clearance_cells > 0:
-            occ = grid_io.dilate_mask(occ.astype(bool), clearance_cells).astype(np.uint8)
+        # NOTE: the safety clearance is NO LONGER baked into the occupancy. occ stays the
+        # RAW mesh so the solver can tell mesh from clearance-halo — it relocates endpoints
+        # only out of the real mesh, applies clearance as a relaxable band (waived around
+        # endpoints), and the overlay re-dilates by this for display. Clearance now travels
+        # to the solver in each route request (no longer baked here).
+        self.last_clearance_m = float(clearance_m)
 
         # Thermal / EM fields: each tagged prim becomes a source at its bbox centre.
         # The field radiates over `char_size + FIELD_MARGIN_M` so a big hot block heats
@@ -188,7 +191,7 @@ class RouterSession:
                 "weights": dict(w.get("weights", {})),
                 "connectivity": int(w.get("connectivity", 26)),
                 "priority": int(w.get("priority", 0)),
-                "clearance_m": 0.0,  # already baked into the voxel grid (compute_grids)
+                "clearance_m": float(self.last_clearance_m),  # real clearance, applied solver-side
                 "start_heading": w.get("start_heading"),
                 "end_heading": w.get("end_heading"),
                 "global_planner": self.global_planner,
@@ -256,7 +259,7 @@ class RouterSession:
             "waypoints": self._scaled(wire.get("waypoints", []), mpu),
             "weights": dict(wire.get("weights", {})),
             "connectivity": int(wire.get("connectivity", 26)),
-            "clearance_m": 0.0,  # already baked into the voxel grid (compute_grids)
+            "clearance_m": float(self.last_clearance_m),  # real clearance, applied solver-side
             "start_heading": wire.get("start_heading"),
             "end_heading": wire.get("end_heading"),
             "global_planner": self.global_planner,
@@ -377,7 +380,7 @@ class RouterSession:
                 "start": [float(x) for x in merge_pos],
                 "end": [float(x) for x in split_pos],
                 "waypoints": trunk_wps, "weights": trunk_weights,
-                "connectivity": conn, "priority": 0, "clearance_m": 0.0,
+                "connectivity": conn, "priority": 0, "clearance_m": float(self.last_clearance_m),
                 "global_planner": self.global_planner,
                 "local_optimizer": self.local_optimizer,
             }
@@ -503,7 +506,7 @@ class RouterSession:
                         "start": [float(x) for x in seg_from],
                         "end": [float(x) for x in seg_to],
                         "waypoints": [list(x) for x in seg_wps], "weights": weights,
-                        "connectivity": wconn, "priority": 0, "clearance_m": 0.0,
+                        "connectivity": wconn, "priority": 0, "clearance_m": float(self.last_clearance_m),
                         "start_heading": prev_heading, "end_heading": goal_h,
                         "global_planner": self.global_planner,
                         "local_optimizer": self.local_optimizer,

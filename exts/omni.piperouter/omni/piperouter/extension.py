@@ -41,6 +41,14 @@ class PipeRouterExtension(omni.ext.IExt):
         s.voxelize_scene(stage, self._sid, resolution=resolution, clearance_m=clearance_m)
         return self._sid
 
+    def last_cell_size_m(self):
+        """Actual voxel edge length (METRES) from the last voxelization, or None. Lets the
+        panel show the REAL voxel size (matching the occupancy overlay) instead of a
+        pre-route estimate."""
+        s = getattr(self, "_session", None)
+        g = getattr(s, "last_grids", None) if s else None
+        return float(g[1]) if g else None
+
     # --- operations called by the panel ------------------------------------
     def health(self, url):
         """Quick reachability probe for the panel's connection indicator."""
@@ -268,15 +276,23 @@ class PipeRouterExtension(omni.ext.IExt):
             # avoids re-voxelizing); fall back to a fresh voxelize if not routed yet
             grids = getattr(s, "last_grids", None)
             if grids is not None:
-                # occ already has the safety clearance baked in (compute_grids)
+                # occ is the RAW mesh now (clearance no longer baked) — re-dilate below
                 gbmin, cell, res, occ, _sd, thermal, em = grids
+                clr = float(getattr(s, "last_clearance_m", 0.0))
             else:
                 gbmin, cell, res, occ, _sd, thermal, em = s.compute_grids(
                     stage, resolution, clearance_m=clearance_m)
+                clr = float(clearance_m)
             ambient = 20.0
 
             if mode == "occupancy":
-                mask, vals, lo = occ > 0, None, 0.0   # prohibited voxels (mesh + clearance)
+                # show mesh + the clearance halo (re-dilate the raw occ by the clearance)
+                occ_disp = occ > 0
+                cc = int(clr / float(cell) + 0.5) if cell else 0
+                if cc > 0:
+                    from . import grid_io
+                    occ_disp = grid_io.dilate_mask(occ_disp, cc).astype(bool)
+                mask, vals, lo = occ_disp, None, 0.0   # prohibited voxels (mesh + clearance)
             elif mode == "thermal":
                 mask, vals, lo = thermal > ambient + 0.5, thermal, ambient
             elif mode == "em":

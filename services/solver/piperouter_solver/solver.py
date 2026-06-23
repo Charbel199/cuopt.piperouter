@@ -59,25 +59,33 @@ class Solver:
         waypts = [req.start, *req.waypoints, req.end]
         cell_seq = [frame.world_to_grid(p) for p in waypts]
 
-        # Buried-endpoint rescue: if START/END sits inside GEOMETRY (the wire-radius +
-        # clearance dilated occupancy — what the user sees as "occupancy"), relocate it to
-        # the NEAREST routable cell instead of failing. We trigger ONLY on geometry/
-        # clearance burial — an endpoint blocked solely by a melt (over-temp) keep-out or a
-        # prior route is left alone so its real no_path reason still surfaces. The marker
-        # stays put; the tube ends at the open point and the wire carries a (red) note.
-        geo_blocked = stack.dilate_occupancy(req.wire.radius_m + req.clearance_m).astype(bool)
-        blocked = planners.blocked_mask(stack, req.wire, req.clearance_m, extra_obstacles)
+        # Safety clearance, split into HARD vs a relaxable SHELL:
+        #   hard  = mesh dilated by the wire radius — the tube physically can't intersect
+        #           it. This is the ONLY thing that buries an endpoint (triggers relocation)
+        #           and the only thing the route can never enter.
+        #   shell = the extra safety-clearance band (radius .. radius+clearance). The route's
+        #           interior keeps this clear, but it's WAIVED in a ball around each endpoint,
+        #           so a connector sitting in the clearance band is still reachable and the
+        #           tube can pass through those near-surface voxels to reach the terminal.
+        # So clearance never pushes an endpoint off a surface; only a real mesh does.
+        radius = req.wire.radius_m
+        clr = float(req.clearance_m)
+        cell = float(frame.cell_size)
+        hard = stack.dilate_occupancy(radius).astype(bool)
+        # relocation target avoids mesh+radius, melt and prior routes — but NOT the clearance
+        # band (an endpoint is allowed to sit within clearance of a surface).
+        reloc_blocked = planners.blocked_mask(stack, req.wire, 0.0, extra_obstacles)
         notes: list[str] = []
         start_world = np.asarray(req.start, dtype=np.float64)
         end_world = np.asarray(req.end, dtype=np.float64)
 
-        def _rescue(cell, marker_world, label):
-            c = tuple(int(v) for v in cell)
-            if not (_in_bounds(geo_blocked, c) and geo_blocked[c]):
-                return cell, marker_world, None      # not buried in geometry -> leave as-is
-            free = _nearest_free_cell(blocked, cell)  # nearest cell valid for routing
+        def _rescue(cell_ijk, marker_world, label):
+            c = tuple(int(v) for v in cell_ijk)
+            if not (_in_bounds(hard, c) and hard[c]):    # buried in MESH+radius only
+                return cell_ijk, marker_world, None
+            free = _nearest_free_cell(reloc_blocked, cell_ijk)
             if free is None:
-                return cell, marker_world, None      # nothing free anywhere -> planner fails
+                return cell_ijk, marker_world, None      # nothing free anywhere -> planner fails
             w = np.asarray(frame.grid_to_world(free), dtype=np.float64)
             dist_mm = float(np.linalg.norm(w - marker_world)) * 1000.0
             return (free, w,
@@ -89,6 +97,26 @@ class Solver:
         for n in (n0, n1):
             if n:
                 notes.append(n)
+
+        # clearance shell with endpoint exemption (balls around the FINAL start/end cells)
+        extra_arr = (np.asarray(extra_obstacles, dtype=bool) if extra_obstacles is not None
+                     else np.zeros(hard.shape, dtype=bool))
+        if clr > 0.0:
+            shell = stack.dilate_occupancy(radius + clr).astype(bool) & ~hard
+            er = (int(np.ceil(clr / cell)) + 1) if cell > 0 else 1
+            nx, ny, nz = hard.shape
+            for ci, cj, ck in (tuple(int(v) for v in cell_seq[0]),
+                               tuple(int(v) for v in cell_seq[-1])):
+                shell[max(0, ci - er):min(nx, ci + er + 1),
+                      max(0, cj - er):min(ny, cj + er + 1),
+                      max(0, ck - er):min(nz, ck + er + 1)] = False
+        else:
+            shell = np.zeros(hard.shape, dtype=bool)
+        # The planner only adds mesh+radius+melt itself, so the clearance shell is folded
+        # into its extra-obstacles and we call it with clearance_m=0. `blocked` (= the same
+        # set) is what the relocation target and the smoother avoid.
+        planner_extra = shell | extra_arr
+        blocked = reloc_blocked | shell
 
         all_cells: list[tuple[int, int, int]] = []
         wp_cell_idx: list[int] = []   # index in all_cells of each waypoint's cell
@@ -102,7 +130,7 @@ class Solver:
             gh = req.end_heading if li == n_legs - 1 else None
             leg = self._solve_leg(
                 planner, stack, req.wire, req.weights, req.connectivity, a, b,
-                extra_obstacles, clearance_m=req.clearance_m, start_heading=sh,
+                planner_extra, clearance_m=0.0, start_heading=sh,
                 goal_heading=gh,
             )
             if leg is None and li > 0 and sh is not None:
@@ -110,13 +138,13 @@ class Solver:
                 # waypoint that demands a >45 turn) — retry without it rather than fail.
                 leg = self._solve_leg(
                     planner, stack, req.wire, req.weights, req.connectivity, a, b,
-                    extra_obstacles, clearance_m=req.clearance_m, start_heading=None,
+                    planner_extra, clearance_m=0.0, start_heading=None,
                     goal_heading=gh,
                 )
             if leg is None:
                 reason = diagnose_no_path(
-                    stack, req.wire, req.connectivity, a, b, extra_obstacles,
-                    clearance_m=req.clearance_m,
+                    stack, req.wire, req.connectivity, a, b, planner_extra,
+                    clearance_m=0.0,
                     start_heading=(req.start_heading if li == 0 else None), goal_heading=gh,
                 )
                 return RouteResult(wire_id=req.wire.id, status="no_path", reason=reason)

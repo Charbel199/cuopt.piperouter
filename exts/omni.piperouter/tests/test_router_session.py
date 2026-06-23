@@ -121,13 +121,15 @@ def test_selected_algorithm_flows_through_http(solver_server, cube_stage):
     assert results[0]["status"] == "routed"
 
 
-def test_clearance_bakes_more_prohibited_voxels(cube_stage):
-    # the core mental model: more clearance -> more prohibited voxels in the grid
+def test_clearance_not_baked_into_occupancy(cube_stage):
+    # clearance is NO LONGER baked into occ — the grid is the raw mesh so the solver can
+    # tell mesh from clearance halo. occ is identical regardless of clearance; the value is
+    # just remembered (and sent to the solver per route, applied as a relaxable band).
     session = RouterSession()   # compute_grids is local; no solver needed
     g0 = session.compute_grids(cube_stage, resolution=24, clearance_m=0.0)
     g1 = session.compute_grids(cube_stage, resolution=24, clearance_m=0.3)
-    occ0, occ1 = g0[3], g1[3]
-    assert int(occ1.sum()) > int(occ0.sum())
+    assert int(g0[3].sum()) == int(g1[3].sum())          # occupancy unchanged by clearance
+    assert session.last_clearance_m == 0.3               # ...but the value is remembered
 
 
 def test_grid_includes_markers_beyond_geometry(solver_server, cube_stage):

@@ -784,12 +784,27 @@ class PipeRouterPanel:
         return _LOCAL_ALGOS[i] if 0 <= i < len(_LOCAL_ALGOS) else "fibre"
 
     def _update_readout(self):
-        res = self._res.model.get_value_as_int()
+        res = max(1, self._res.model.get_value_as_int())
         # Cells are uniform cubes: cell size = (longest scene axis) / resolution, and
         # the other axes get however many of those cubes fit. So `res` is the voxel
         # count along the LONGEST axis; spacing is identical on all three axes.
+        # Prefer the ACTUAL voxel size from the last route (matches the occupancy overlay);
+        # fall back to a pre-route estimate from the scene bounds.
+        size_txt = ""
+        real = None
+        try:
+            real = self._api.last_cell_size_m()      # metres, or None
+        except Exception:
+            real = None
+        if real:
+            size_txt = f"  ~{self._fmt_len_m(real)} per voxel (routed grid)"
+        else:
+            stage = self._get_stage() if self._get_stage else None
+            longest = self._scene_longest_axis_m(stage) if stage is not None else None
+            if longest:
+                size_txt = f"  ~{self._fmt_len_m(longest / res)} per voxel (estimate)"
         self._readout.text = (f"~{res} voxels along the longest axis (uniform cubic "
-                              f"cells). Higher = finer detail, slower routing.")
+                              f"cells){size_txt}. Higher = finer detail, slower routing.")
 
     # ------------------------------------------------- deferred UI refresh
     # omni.ui forbids clearing/rebuilding a container from inside an event/draw
@@ -949,6 +964,41 @@ class PipeRouterPanel:
         except Exception:
             pass
         return float(self._stage_inv(stage))   # ~1 m
+
+    def _scene_longest_axis_m(self, stage):
+        """Longest scene bbox axis in METRES (stage units * metersPerUnit). Drives the voxel
+        size, since cells are cubes sized = longest_axis / resolution. None if no scene."""
+        try:
+            from pxr import Usd, UsdGeom
+            bb = UsdGeom.BBoxCache(Usd.TimeCode.Default(),
+                                   [UsdGeom.Tokens.default_, UsdGeom.Tokens.render])
+            mpu = float(UsdGeom.GetStageMetersPerUnit(stage)) or 1.0
+            targets = []
+            w = stage.GetPrimAtPath("/World")
+            if w and w.IsValid():
+                targets.append(w)
+            dp = stage.GetDefaultPrim()
+            if dp and dp.IsValid():
+                targets.append(dp)
+            targets.append(stage.GetPseudoRoot())
+            for prim in targets:
+                rng = bb.ComputeWorldBound(prim).ComputeAlignedRange()
+                if not rng.IsEmpty():
+                    longest = float(max(rng.GetSize()))
+                    if longest > 1e-9:
+                        return longest * mpu
+        except Exception:
+            pass
+        return None
+
+    @staticmethod
+    def _fmt_len_m(m):
+        """Human length: mm under 1 cm, cm under 1 m, else m."""
+        if m < 0.01:
+            return f"{m * 1000.0:.1f} mm"
+        if m < 1.0:
+            return f"{m * 100.0:.2f} cm"
+        return f"{m:.3f} m"
 
     def _marker_radius(self, stage):
         """Draggable-marker radius in STAGE units, ~0.4%% of the scene diagonal, clamped to
@@ -2034,6 +2084,7 @@ class PipeRouterPanel:
         self._refresh_overlay()
         self._refresh_hud()
         self._refresh_debug()
+        self._update_readout()   # now shows the ACTUAL routed voxel size
 
     def _on_refine(self):
         if self._selected is None:
@@ -2145,6 +2196,7 @@ class PipeRouterPanel:
         self._refresh_overlay()
         self._refresh_hud()
         self._refresh_debug()
+        self._update_readout()   # now shows the ACTUAL routed voxel size
 
     # ------------------------------------------------------ tag / overlay / io
     def _refresh_views(self, force=False):

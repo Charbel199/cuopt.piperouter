@@ -397,7 +397,7 @@ def octree_leaves(blocked):
     return ranges, leaf_of
 
 
-def octree_corridor(ranges, leaf_of, adj, start_cell, goal_cell):
+def octree_corridor(ranges, leaf_of, adj, start_cell, goal_cell, leaf_soft=None):
     """Coarse A* (plain distance) through free-leaf centres start->goal, rasterized to a
     dense cell list. Returns the corridor cells or None. Used as a cheap HEURISTIC corridor
     for octree_lattice; the fine lattice does the real cost/collision routing in the band."""
@@ -428,7 +428,12 @@ def octree_corridor(ranges, leaf_of, adj, start_cell, goal_cell):
             found = True
             break
         for nb in adj.get(lid, ()):
-            ng = g[lid] + float(np.linalg.norm(ctr(nb) - ctr(lid)))
+            # distance, biased by the destination leaf's soft cost so the corridor heads
+            # toward cheap cells (e.g. hugs surfaces, avoids heat/EM) instead of always
+            # taking the open-air geometric shortest — which is what defeated surface-hug.
+            step = float(np.linalg.norm(ctr(nb) - ctr(lid)))
+            soft_nb = float(leaf_soft[nb]) if leaf_soft is not None else 0.0
+            ng = g[lid] + step * (1.0 + soft_nb)
             if ng < g.get(nb, 1e18):
                 g[nb] = ng
                 came[nb] = lid
@@ -617,9 +622,18 @@ class OctreeLatticeGlobal(_GridPlannerBase):
     def plan(self, stack, wire, weights, connectivity, start_cell, goal_cell,
              extra_obstacles, clearance_m, start_heading, goal_heading):
         ranges, leaf_of, adj = self._scene_octree(stack, wire, clearance_m)
+        # per-leaf mean soft cost (surface-hug / thermal / EM) so the coarse corridor is
+        # pulled toward the cells the route actually wants — vectorized, leaves are cached.
+        soft = fields.soft_cost_field(stack, wire, weights)
+        flat = leaf_of.ravel()
+        m = flat >= 0
+        n = len(ranges)
+        sums = np.bincount(flat[m], weights=soft.ravel()[m], minlength=n)
+        cnts = np.bincount(flat[m], minlength=n)
+        leaf_soft = sums / np.maximum(cnts, 1)
         corridor = octree_corridor(ranges, leaf_of, adj,
                                    tuple(int(v) for v in start_cell),
-                                   tuple(int(v) for v in goal_cell))
+                                   tuple(int(v) for v in goal_cell), leaf_soft=leaf_soft)
         if corridor:
             nx, ny, nz = stack.occupancy.shape
             band = np.zeros((nx, ny, nz), dtype=bool)
