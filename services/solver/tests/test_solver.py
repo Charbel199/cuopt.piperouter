@@ -333,3 +333,77 @@ def test_impossible_heading_is_no_path(empty_stack):
     )
     res = Solver().route_one(s, req)
     assert res.status == "no_path"
+
+
+def test_route_all_keeps_tube_bodies_apart(empty_stack):
+    # Two OD-24mm pipes with endpoints 2 cells (20mm) apart: their tubes need 24mm of
+    # centerline separation, so the second route must BOW AWAY mid-span instead of
+    # running parallel and interpenetrating (the old code only blocked the 1-cell
+    # centerline, so tubes overlapped at fine resolutions).
+    import numpy as np
+    from piperouter_solver.grids import GridStack
+    from piperouter_solver.models import GridFrame
+
+    frame = GridFrame(bounds_min=np.zeros(3), cell_size=0.01, res_xyz=(40, 40, 40))
+    s = GridStack(frame=frame, occupancy=np.zeros(frame.res_xyz, np.uint8),
+                  surface_dist=np.full(frame.res_xyz, 5.0, np.float32),
+                  thermal=np.full(frame.res_xyz, 20.0, np.float32),
+                  em=np.zeros(frame.res_xyz, np.float32))
+    fat = WireType(id="fat", label="fat", kind="pipe", outer_diameter_mm=24.0,
+                   inner_diameter_mm=20.0, min_bend_radius_mm=60.0, cost_per_m=1.0,
+                   mass_per_m_kg=0.1, max_temp_c=200.0, em_sensitivity=0.0,
+                   color=(0.2, 0.4, 0.9))
+    reqA = RouteRequest(wire=fat, start=(0.02, 0.20, 0.20), end=(0.38, 0.20, 0.20),
+                        weights={"bend": 1.0, "smoothing": 0.0}, priority=0)
+    reqB = RouteRequest(wire=fat, start=(0.02, 0.22, 0.20), end=(0.38, 0.22, 0.20),
+                        weights={"bend": 1.0, "smoothing": 0.0}, priority=1)
+    rep = Solver().route_all(s, [reqA, reqB])
+    assert [r.status for r in rep.results] == ["routed", "routed"]
+    A = np.asarray(rep.results[0].polyline)
+    B = np.asarray(rep.results[1].polyline)
+    interior = B[3:-3]                      # terminals are user-fixed; judge the run
+    dmin = min(float(np.linalg.norm(a - b)) for a in A for b in interior)
+    assert dmin >= 0.024 - 1e-6, f"tube bodies overlap: {dmin*1000:.1f}mm < 24mm"
+
+
+def test_waypoint_in_clearance_band_still_routes(empty_stack):
+    # A waypoint 3 cells above a floor, inside a 6-cell clearance band: the shell must be
+    # waived around WAYPOINTS like endpoints, so the route passes through it (was no_path).
+    import numpy as np
+    from piperouter_solver.grids import GridStack
+    from piperouter_solver.models import GridFrame
+
+    frame = GridFrame(bounds_min=np.zeros(3), cell_size=0.01, res_xyz=(40, 40, 40))
+    s = GridStack(frame=frame, occupancy=np.zeros(frame.res_xyz, np.uint8),
+                  surface_dist=np.full(frame.res_xyz, 5.0, np.float32),
+                  thermal=np.full(frame.res_xyz, 20.0, np.float32),
+                  em=np.zeros(frame.res_xyz, np.float32))
+    s.occupancy[:, :, 8] = 1                # floor slab
+    wp = (0.205, 0.205, 0.115)              # ~3 cells above the floor
+    res = Solver().route_one(s, RouteRequest(
+        wire=_wire(), start=(0.05, 0.20, 0.30), end=(0.35, 0.20, 0.30),
+        waypoints=[wp], weights={"bend": 1.0, "smoothing": 1.0}, clearance_m=0.06))
+    assert res.status == "routed"
+    d = min(float(np.linalg.norm(np.asarray(p) - np.asarray(wp))) for p in res.polyline)
+    assert d < 0.015, f"route does not pass through the waypoint ({d*1000:.0f}mm away)"
+
+
+def test_no_path_reason_names_clearance_not_phantom_wire(empty_stack):
+    # A corridor sealed by CLEARANCE alone (no other wires) must not be blamed on
+    # "another already-routed wire" (the shell used to be folded into extra_obstacles).
+    import numpy as np
+    from piperouter_solver.grids import GridStack
+    from piperouter_solver.models import GridFrame
+
+    frame = GridFrame(bounds_min=np.zeros(3), cell_size=0.01, res_xyz=(40, 40, 40))
+    s = GridStack(frame=frame, occupancy=np.zeros(frame.res_xyz, np.uint8),
+                  surface_dist=np.full(frame.res_xyz, 5.0, np.float32),
+                  thermal=np.full(frame.res_xyz, 20.0, np.float32),
+                  em=np.zeros(frame.res_xyz, np.float32))
+    s.occupancy[20, :, :] = 1
+    s.occupancy[20, 20, 20] = 0             # 1-cell hole, sealed once clearance applies
+    res = Solver().route_one(s, RouteRequest(
+        wire=_wire(), start=(0.05, 0.20, 0.20), end=(0.35, 0.20, 0.20), clearance_m=0.05))
+    assert res.status == "no_path"
+    assert "already-routed" not in res.reason
+    assert "clearance" in res.reason.lower()

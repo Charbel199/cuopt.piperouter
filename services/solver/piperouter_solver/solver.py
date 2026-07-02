@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import deque
 
 import numpy as np
+from scipy import ndimage
 
 from . import optimizers, planners
 from .lattice import ExpandedLatticeBuilder, LatticeBuilder, diagnose_no_path
@@ -10,6 +11,8 @@ from .models import RouteRequest, RouteResult, SolveReport
 
 # 6-neighbour steps for the nearest-free BFS used to rescue a buried endpoint.
 _BFS_STEPS = ((1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1))
+# 6-connected structuring element for radius dilations of routed-wire masks.
+_ST6 = ndimage.generate_binary_structure(3, 1)
 
 
 def _in_bounds(blocked, c):
@@ -71,10 +74,19 @@ class Solver:
         radius = req.wire.radius_m
         clr = float(req.clearance_m)
         cell = float(frame.cell_size)
+        rad_cells = int(radius / cell + 0.5 + 1e-9) if cell > 0 else 0
         hard = stack.dilate_occupancy(radius).astype(bool)
-        # relocation target avoids mesh+radius, melt and prior routes — but NOT the clearance
+        # Prior routed wires (route_all marks them dilated by THEIR radius; refine
+        # rasterizes locked tubes likewise), grown here by THIS wire's radius too, so the
+        # two tube BODIES stay r_prior + r_this apart — not just their centerlines.
+        prior = None
+        if extra_obstacles is not None:
+            prior = np.asarray(extra_obstacles, dtype=bool)
+            if rad_cells > 0 and prior.any():
+                prior = ndimage.binary_dilation(prior, structure=_ST6, iterations=rad_cells)
+        # relocation target avoids mesh+radius, melt and prior tubes — but NOT the clearance
         # band (an endpoint is allowed to sit within clearance of a surface).
-        reloc_blocked = planners.blocked_mask(stack, req.wire, 0.0, extra_obstacles)
+        reloc_blocked = planners.blocked_mask(stack, req.wire, 0.0, prior)
         notes: list[str] = []
         start_world = np.asarray(req.start, dtype=np.float64)
         end_world = np.asarray(req.end, dtype=np.float64)
@@ -98,25 +110,31 @@ class Solver:
             if n:
                 notes.append(n)
 
-        # clearance shell with endpoint exemption (balls around the FINAL start/end cells)
-        extra_arr = (np.asarray(extra_obstacles, dtype=bool) if extra_obstacles is not None
-                     else np.zeros(hard.shape, dtype=bool))
+        # clearance shell, WAIVED in a ball around every terminal the route must touch:
+        # start, END, and each WAYPOINT (a user-pinned point near a surface is just as
+        # legitimate a terminal as a connector — without this, a waypoint inside the
+        # clearance band made the whole wire no_path).
         if clr > 0.0:
             shell = stack.dilate_occupancy(radius + clr).astype(bool) & ~hard
             er = (int(np.ceil(clr / cell)) + 1) if cell > 0 else 1
             nx, ny, nz = hard.shape
-            for ci, cj, ck in (tuple(int(v) for v in cell_seq[0]),
-                               tuple(int(v) for v in cell_seq[-1])):
+            for c in cell_seq:                     # start, waypoints..., end (post-rescue)
+                ci, cj, ck = (int(c[0]), int(c[1]), int(c[2]))
                 shell[max(0, ci - er):min(nx, ci + er + 1),
                       max(0, cj - er):min(ny, cj + er + 1),
                       max(0, ck - er):min(nz, ck + er + 1)] = False
         else:
-            shell = np.zeros(hard.shape, dtype=bool)
-        # The planner only adds mesh+radius+melt itself, so the clearance shell is folded
-        # into its extra-obstacles and we call it with clearance_m=0. `blocked` (= the same
-        # set) is what the relocation target and the smoother avoid.
-        planner_extra = shell | extra_arr
-        blocked = reloc_blocked | shell
+            shell = None
+        # The planner only adds mesh+radius+melt itself, so the shell + prior tubes are
+        # folded into its extra-obstacles and it runs with clearance_m=0. `blocked` (the
+        # same set) is what the smoother avoids. `prior` is kept SEPARATE from the shell
+        # so no_path diagnosis can tell "another wire" from "the clearance band".
+        if shell is not None:
+            planner_extra = shell if prior is None else (shell | prior)
+            blocked = reloc_blocked | shell
+        else:
+            planner_extra = prior
+            blocked = reloc_blocked
 
         all_cells: list[tuple[int, int, int]] = []
         wp_cell_idx: list[int] = []   # index in all_cells of each waypoint's cell
@@ -142,9 +160,12 @@ class Solver:
                     goal_heading=gh,
                 )
             if leg is None:
+                # diagnose against PRIOR WIRES + the real clearance (not the shell folded
+                # into extra), so "overlaps another already-routed wire" is only said when
+                # a wire is actually there, and clearance-sealed cases name the clearance.
                 reason = diagnose_no_path(
-                    stack, req.wire, req.connectivity, a, b, planner_extra,
-                    clearance_m=0.0,
+                    stack, req.wire, req.connectivity, a, b, prior,
+                    clearance_m=clr,
                     start_heading=(req.start_heading if li == 0 else None), goal_heading=gh,
                 )
                 return RouteResult(wire_id=req.wire.id, status="no_path", reason=reason)
@@ -213,14 +234,23 @@ class Solver:
 
     def route_all(self, stack, requests: list[RouteRequest]) -> SolveReport:
         """Priority-ordered greedy: earlier (lower-priority-number) routes become
-        obstacles for later ones (spec §5, Route-All)."""
+        obstacles for later ones (spec §5, Route-All). Each routed wire is marked
+        DILATED BY ITS RADIUS (its actual tube body, not just the 1-cell centerline);
+        route_one additionally grows prior obstacles by the next wire's radius, so two
+        tube bodies keep r_a + r_b apart instead of overlapping at fine resolutions."""
         ordered = sorted(requests, key=lambda r: r.priority)
         occupied = np.zeros(stack.frame.res_xyz, dtype=bool)
+        cell = float(stack.frame.cell_size)
         results: list[RouteResult] = []
         for req in ordered:
             res = self.route_one(stack, req, extra_obstacles=occupied)
-            if res.status == "routed":
+            if res.status == "routed" and res.cells:
+                m = np.zeros(stack.frame.res_xyz, dtype=bool)
                 for c in res.cells:
-                    occupied[c] = True
+                    m[c] = True
+                rc = int(req.wire.radius_m / cell + 0.5 + 1e-9) if cell > 0 else 0
+                if rc > 0:
+                    m = ndimage.binary_dilation(m, structure=_ST6, iterations=rc)
+                occupied |= m
             results.append(res)
         return SolveReport(results=results)

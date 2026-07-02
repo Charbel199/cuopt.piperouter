@@ -26,16 +26,28 @@ class GridStack:
         cell fits in the free space around the centerline and does not dilate
         (it may legitimately run flush against a surface); larger radii grow the
         blocked region by the number of cells they actually span.
+
+        CACHED per dilation-cell count (occupancy is immutable for a stack's
+        lifetime, and route_one/planners call this several times per wire with the
+        same radii). Treat the returned array as READ-ONLY — every current caller
+        copies via .astype() or combines with `|`/`&` into a new array.
         """
         # +1e-9 keeps the round-half-up boundary robust against float error
         # (e.g. 0.15/0.1 evaluates to 1.4999..., which must round to 2).
         cells = int(radius_m / self.frame.cell_size + 0.5 + 1e-9)
+        cache = self.__dict__.setdefault("_dilate_cache", {})
+        hit = cache.get(cells)
+        if hit is not None:
+            return hit
         if cells <= 0:
-            return self.occupancy.copy()
-        structure = ndimage.generate_binary_structure(3, 1)
-        return ndimage.binary_dilation(
-            self.occupancy.astype(bool), structure=structure, iterations=cells
-        ).astype(np.uint8)
+            out = self.occupancy.copy()
+        else:
+            structure = ndimage.generate_binary_structure(3, 1)
+            out = ndimage.binary_dilation(
+                self.occupancy.astype(bool), structure=structure, iterations=cells
+            ).astype(np.uint8)
+        cache[cells] = out
+        return out
 
     def save(self, path: str | Path) -> None:
         np.savez_compressed(
