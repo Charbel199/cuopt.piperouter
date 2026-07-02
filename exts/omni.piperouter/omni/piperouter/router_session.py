@@ -44,7 +44,7 @@ class RouterSession:
         self.last_clearance_m = 0.0   # safety clearance (set in compute_grids; sent per route,
                                       # no longer baked into the grid)
         # selected routing algorithms (sent to the solver in every route request)
-        self.global_planner = "lattice"
+        self.global_planner = "octree_lattice"
         self.local_optimizer = "fibre"
 
     @staticmethod

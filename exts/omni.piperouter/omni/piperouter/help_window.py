@@ -44,7 +44,8 @@ _SECTIONS = [
     ("Tune a wire", [
         "Select a wire to open its inspector.",
         "Sliders are soft costs - 0 = ignore, higher = avoid more: Surface, Bend, Thermal, EM, Smoothing.",
-        "Set Start / End headings to fix the direction the cable leaves and arrives.",
+        "Set Start / End headings to fix the direction the cable leaves and arrives - "
+        "pick an axis, or 'Custom' to rotate the marker's arrow / type exact angles.",
         "'Re-route this wire' re-solves only it (others stay as obstacles); 'Lock' freezes it.",
     ]),
     ("Waypoints", [
@@ -73,9 +74,9 @@ _SECTIONS = [
         "'Reset' clears wires + markers but keeps your obstacle scene.",
     ]),
     ("Algorithms (optional)", [
-        "Global algorithm = path finder (default 'lattice'). Local optimizer = shaping (default 'fibre').",
+        "Global algorithm = path finder (default 'octree_lattice' - fast). Local optimizer = shaping (default 'fibre').",
         "Everything tagged '(experimental)' is for benchmarking only.",
-        "Stick with lattice + fibre unless you're comparing methods.",
+        "Pick 'lattice (exhaustive)' when soft costs must be followed exactly; the rest are for benchmarking.",
     ]),
     ("Tips", [
         "Higher Grid resolution = finer routes but slower.",

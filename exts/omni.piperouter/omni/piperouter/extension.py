@@ -178,7 +178,7 @@ class PipeRouterExtension(omni.ext.IExt):
         except Exception as exc:
             carb.log_warn(f"[piperouter] _frame_scene failed (non-critical): {exc}")
 
-    def route_all(self, wires, resolution, url, global_planner="lattice",
+    def route_all(self, wires, resolution, url, global_planner="octree_lattice",
                   local_optimizer="fibre"):
         try:
             clr = wires[0].get("clearance_m", 0.0) if wires else 0.0
@@ -215,7 +215,7 @@ class PipeRouterExtension(omni.ext.IExt):
             return None, None, str(exc)
 
     def route_all_bundles(self, wires, bundles, resolution, url,
-                          global_planner="lattice", local_optimizer="fibre"):
+                          global_planner="octree_lattice", local_optimizer="fibre"):
         try:
             clr = wires[0].get("clearance_m", 0.0) if wires else 0.0
             carb.log_info(f"[piperouter] Route All (bundles): {len(wires)} wire(s), "
@@ -233,7 +233,7 @@ class PipeRouterExtension(omni.ext.IExt):
             carb.log_error(f"[piperouter] route_all_bundles failed: {exc}")
             return None, None, str(exc)
 
-    def refine(self, wire, locked_wires, resolution, url, global_planner="lattice",
+    def refine(self, wire, locked_wires, resolution, url, global_planner="octree_lattice",
                local_optimizer="fibre"):
         try:
             s = self._ensure_session(url)

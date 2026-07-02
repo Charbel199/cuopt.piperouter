@@ -29,11 +29,15 @@ _WEIGHTS = ("surface", "bend", "thermal", "em", "smoothing")
 
 # Selectable routing algorithms (sent to the solver). Index order = ComboBox order.
 # The _ALGOS tuples are the VALUES sent to the solver; the _LABELS are what the combo
-# shows - everything except the production defaults (lattice / fibre) is tagged
-# "(experimental)" so an engineer knows which pair is the supported one.
-_GLOBAL_ALGOS = ("lattice", "astar", "fmm", "rrt", "octree", "medial", "octree_lattice")
+# shows. octree_lattice is the production DEFAULT (~10x faster at high res: the same
+# bend-aware lattice restricted to a corridor band, falling back to the full lattice
+# when the band is too tight). Plain lattice stays selectable as the exhaustive mode -
+# the gold standard when soft costs must be followed exactly. The rest are experimental.
+_GLOBAL_ALGOS = ("octree_lattice", "lattice", "astar", "fmm", "rrt", "octree", "medial")
 _LOCAL_ALGOS = ("fibre", "none", "trajopt", "elastic_rod")
-_GLOBAL_LABELS = tuple(n if n == "lattice" else f"{n} (experimental)" for n in _GLOBAL_ALGOS)
+_GLOBAL_SPECIAL = {"octree_lattice": "octree_lattice (fast - default)",
+                   "lattice": "lattice (exhaustive)"}
+_GLOBAL_LABELS = tuple(_GLOBAL_SPECIAL.get(n, f"{n} (experimental)") for n in _GLOBAL_ALGOS)
 _LOCAL_LABELS = tuple(n if n in ("fibre", "none") else f"{n} (experimental)" for n in _LOCAL_ALGOS)
 
 # Slider help - shown as tooltips so the soft constraints are self-explanatory.
@@ -306,14 +310,20 @@ class PipeRouterPanel:
                 # ---- experimental algorithm pickers, tucked away by default
                 with ui.CollapsableFrame("Advanced - routing algorithms", collapsed=True):
                     with ui.VStack(spacing=4, height=0):
-                        ui.Label("Defaults (lattice + fibre) are recommended; the rest are "
-                                 "experimental / for benchmarking.", word_wrap=True,
+                        ui.Label("Defaults (octree_lattice + fibre) are recommended. Pick "
+                                 "'lattice (exhaustive)' when soft costs must be followed "
+                                 "exactly; the rest are experimental / for benchmarking.",
+                                 word_wrap=True,
                                  style={"color": 0xFF888888, "font_size": 12})
                         with ui.HStack(height=0):
                             ui.Label("Global algorithm", width=self._LBL,
-                                     tooltip="Path-finding method. lattice = production "
-                                             "heading-aware default; others for comparison: "
-                                             "astar, fmm (Eikonal), rrt, octree, medial.")
+                                     tooltip="Path-finding method. octree_lattice = default "
+                                             "(bend-aware lattice confined to an octree "
+                                             "corridor, ~10x faster at high res, falls back "
+                                             "to the full lattice when needed); lattice = "
+                                             "exhaustive full-grid search; others for "
+                                             "comparison: astar, fmm (Eikonal), rrt, octree, "
+                                             "medial.")
                             self._global_combo = ui.ComboBox(0, *_GLOBAL_LABELS)
                         with ui.HStack(height=0):
                             ui.Label("Local optimizer", width=self._LBL,
@@ -772,9 +782,9 @@ class PipeRouterPanel:
     def _global_algo(self):
         combo = getattr(self, "_global_combo", None)
         if combo is None:
-            return "lattice"
+            return _GLOBAL_ALGOS[0]
         i = int(combo.model.get_item_value_model().get_value_as_int())
-        return _GLOBAL_ALGOS[i] if 0 <= i < len(_GLOBAL_ALGOS) else "lattice"
+        return _GLOBAL_ALGOS[i] if 0 <= i < len(_GLOBAL_ALGOS) else _GLOBAL_ALGOS[0]
 
     def _local_algo(self):
         combo = getattr(self, "_local_combo", None)
@@ -1111,6 +1121,11 @@ class PipeRouterPanel:
         self._conn_combo.model.get_item_value_model().set_value(
             int(settings.get("connectivity_idx", 2)))   # default Smooth (26)
         self._clearance.model.set_value(float(settings.get("clearance", 0.0)))
+        # Legacy migration: pre-v2 sessions saved "lattice" because it was the OLD
+        # default, not a deliberate choice — bring them onto the new octree_lattice
+        # default. Sessions saved at v2+ with "lattice" chose it and are respected.
+        if int(data.get("version", 1)) < 2 and settings.get("global_algo") == "lattice":
+            settings["global_algo"] = "octree_lattice"
         if settings.get("global_algo") in _GLOBAL_ALGOS:
             self._global_combo.model.get_item_value_model().set_value(
                 _GLOBAL_ALGOS.index(settings["global_algo"]))
@@ -1486,22 +1501,15 @@ class PipeRouterPanel:
                                    alignment=ui.Alignment.RIGHT_CENTER,
                                    style={"color": 0xFFCCCCCC, "font_size": 12})
                     self._slider_vals[k] = val
-            # --- pinned headings group (None = free direction)
+            # --- pinned headings group (None = free direction; Custom = rotate the
+            # marker's arrow in the viewport, or type exact angles below)
             ui.Spacer(height=2)
             ui.Label("HEADINGS  (optional; None = free direction)",
                      style={"color": _ACCENT, "font_size": 11})
-            with ui.HStack(height=0):
-                ui.Label("Start heading", width=96,
-                         tooltip="Force the wire to LEAVE the start in this direction.")
-                start_combo = ui.ComboBox(w["start_head_idx"], *headings.HEADING_OPTIONS)
-                start_combo.model.add_item_changed_fn(
-                    lambda m, *_: self._set_heading("start_head_idx", m))
-            with ui.HStack(height=0):
-                ui.Label("End heading", width=96,
-                         tooltip="Force the wire to ARRIVE at the end in this direction.")
-                end_combo = ui.ComboBox(w["end_head_idx"], *headings.HEADING_OPTIONS)
-                end_combo.model.add_item_changed_fn(
-                    lambda m, *_: self._set_heading("end_head_idx", m))
+            self._heading_row(w, "start",
+                              "Force the wire to LEAVE the start in this direction.")
+            self._heading_row(w, "end",
+                              "Force the wire to ARRIVE at the end in this direction.")
             # --- waypoints / route order group
             ui.Spacer(height=2)
             ui.Label("WAYPOINTS & ROUTE ORDER", style={"color": _ACCENT, "font_size": 11})
@@ -1752,13 +1760,116 @@ class PipeRouterPanel:
             if s is not None:
                 s.model.set_value(_DEFAULT_WEIGHT)   # fires _set_weight -> updates readout
 
+    # ----- start/end heading (axis presets, or a rotatable marker arrow = "Custom") -----
+    _HEAD_COLORS = {"start": (0.2, 0.9, 0.2), "end": (0.9, 0.2, 0.2)}
+
+    @staticmethod
+    def _stage_up(stage):
+        try:
+            from pxr import UsdGeom
+            return str(UsdGeom.GetStageUpAxis(stage))
+        except Exception:
+            return "Z"
+
+    def _marker_path(self, w, which):
+        return f"{scene_ops.MARKERS_SCOPE}/{w['key']}_{which}"
+
+    def _heading_row(self, w, which, tip):
+        """One heading row: combo (None / axes / Custom) + azimuth/elevation angle
+        fields when Custom is selected. The angles and the marker's arrow stay in sync:
+        typing angles re-aims the marker; rotating the marker in the viewport wins at
+        route time (the solver reads the marker's rotated +X axis)."""
+        key = f"{which}_head_idx"
+        idx = int(w.get(key, 0))
+        with ui.HStack(height=0):
+            ui.Label(f"{which.capitalize()} heading", width=96, tooltip=tip)
+            combo = ui.ComboBox(idx, *headings.HEADING_OPTIONS)
+            combo.model.add_item_changed_fn(
+                lambda m, *_, k=key: self._set_heading(k, m))
+        if 0 <= idx < len(headings.HEADING_OPTIONS) \
+                and headings.HEADING_OPTIONS[idx] == headings.CUSTOM:
+            stage = self._get_stage()
+            az = el = 0.0
+            if stage is not None:
+                ax = scene_ops.get_world_axis(stage, self._marker_path(w, which))
+                if ax is not None:
+                    az, el = headings.vector_to_angles(ax, self._stage_up(stage))
+            with ui.HStack(height=0, spacing=6):
+                ui.Spacer(width=96)
+                ui.Label("azim", width=34,
+                         tooltip="Degrees around the up-axis (0 = +X). Or just rotate "
+                                 "the marker's arrow in the viewport.")
+                azf = ui.FloatDrag(min=-180.0, max=180.0, step=1.0)
+                azf.model.set_value(az)
+                ui.Label("elev", width=30,
+                         tooltip="Degrees toward the up-axis (+90 = straight up).")
+                elf = ui.FloatDrag(min=-90.0, max=90.0, step=1.0)
+                elf.model.set_value(el)
+                # attach AFTER set_value so building the row doesn't fire the callback
+                azf.model.add_value_changed_fn(
+                    lambda m, wh=which, a=azf, e=elf: self._set_heading_angles(wh, a, e))
+                elf.model.add_value_changed_fn(
+                    lambda m, wh=which, a=azf, e=elf: self._set_heading_angles(wh, a, e))
+
     def _set_heading(self, key, model):
-        # Persist the chosen heading axis index into the selected wire so it
-        # survives switching wires (mirrors _set_weight for the sliders).
+        # Persist the chosen heading index (mirrors _set_weight), then sync the marker's
+        # arrow: axis presets aim it, Custom shows it (keeping the current rotation),
+        # None hides it. Rebuild the inspector so the angle fields appear/disappear.
         if self._selected is None or self._selected >= len(self._wires):
             return
         idx = int(model.get_item_value_model().get_value_as_int())
-        self._wires[self._selected][key] = idx
+        w = self._wires[self._selected]
+        if int(w.get(key, 0)) == idx:
+            return                      # combo fired without a real change (e.g. rebuild)
+        w[key] = idx
+        self._refresh_heading_arrow(w, "start" if key.startswith("start") else "end")
+        self._schedule(inspector=True)
+
+    def _refresh_heading_arrow(self, w, which):
+        stage = self._get_stage()
+        if stage is None:
+            return
+        idx = int(w.get(f"{which}_head_idx", 0))
+        label = (headings.HEADING_OPTIONS[idx]
+                 if 0 <= idx < len(headings.HEADING_OPTIONS) else "None")
+        path = self._marker_path(w, which)
+        color = self._HEAD_COLORS[which]
+        inc = which == "end"   # end arrow drawn arriving INTO the marker
+        if label == "None":
+            scene_ops.set_marker_direction(stage, path, None, show=False)
+        elif label == headings.CUSTOM:
+            scene_ops.set_marker_direction(stage, path, None, show=True, color=color,
+                                           incoming=inc)
+        else:
+            scene_ops.set_marker_direction(stage, path, headings.axis_to_vector(label),
+                                           show=True, color=color, incoming=inc)
+
+    def _set_heading_angles(self, which, az_field, el_field):
+        """Angle fields -> re-aim the marker's arrow (Custom mode)."""
+        if self._selected is None or self._selected >= len(self._wires):
+            return
+        stage = self._get_stage()
+        if stage is None:
+            return
+        w = self._wires[self._selected]
+        v = headings.angles_to_vector(az_field.model.get_value_as_float(),
+                                      el_field.model.get_value_as_float(),
+                                      self._stage_up(stage))
+        scene_ops.set_marker_direction(stage, self._marker_path(w, which), v,
+                                       show=True, color=self._HEAD_COLORS[which],
+                                       incoming=(which == "end"))
+
+    def _heading_vector(self, stage, w, which):
+        """The heading vector to send to the solver: None (free), an axis preset, or -
+        for Custom - the marker's rotated local +X axis read from the stage."""
+        idx = int(w.get(f"{which}_head_idx", 0))
+        label = (headings.HEADING_OPTIONS[idx]
+                 if 0 <= idx < len(headings.HEADING_OPTIONS) else "None")
+        if label == headings.CUSTOM:
+            ax = scene_ops.get_world_axis(stage, self._marker_path(w, which))
+            return [float(x) for x in ax] if ax is not None else None
+        v = headings.axis_to_vector(label)
+        return list(v) if v else None
 
     def _add_waypoint(self):
         stage = self._get_stage()
@@ -2019,15 +2130,14 @@ class PipeRouterPanel:
             if p is not None:
                 wps.append([float(x) for x in p])
                 wp_slots.append(int(slots[i]) if i < len(slots) else 0)
-        sh = headings.axis_to_vector(headings.HEADING_OPTIONS[w.get("start_head_idx", 0)])
-        eh = headings.axis_to_vector(headings.HEADING_OPTIONS[w.get("end_head_idx", 0)])
+        sh = self._heading_vector(stage, w, "start")
+        eh = self._heading_vector(stage, w, "end")
         return {"name": w["name"], "spec": wire_library.as_spec(self._types[w["type_index"]]),
                 "start": [float(x) for x in start], "end": [float(x) for x in end],
                 "waypoints": wps, "waypoint_slots": wp_slots, "weights": dict(w["weights"]),
                 "connectivity": self._connectivity(), "priority": priority,
                 "clearance_m": float(self._clearance.model.get_value_as_float()),
-                "start_heading": list(sh) if sh else None,
-                "end_heading": list(eh) if eh else None}
+                "start_heading": sh, "end_heading": eh}
 
     def _on_route_all(self):
         pairs = [(w, self._gather_wire(w, i)) for i, w in enumerate(self._wires)]

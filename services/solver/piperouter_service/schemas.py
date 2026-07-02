@@ -42,7 +42,7 @@ class RouteSpec(BaseModel):
     clearance_m: float = 0.0
     start_heading: list[float] | None = None
     end_heading: list[float] | None = None
-    global_planner: str = "lattice"
+    global_planner: str = "octree_lattice"
     local_optimizer: str = "fibre"
 
     def to_route_request(self) -> RouteRequest:

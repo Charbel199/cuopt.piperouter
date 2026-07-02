@@ -26,7 +26,16 @@ from .fields import melt_mask, neighbor_offsets, soft_cost_field, turn_penalty
 
 # Heading-pin cone: a pinned departure/arrival heading only admits neighbor
 # offsets whose unit direction is within this half-angle of the pinned vector.
-_HEADING_COS = float(np.cos(np.pi / 4.0))  # 45 degrees
+# The epsilon keeps offsets at EXACTLY 45 degrees inside the cone (a heading of e.g.
+# (0,1,0) vs the (1,1,0) diagonal dots to cos45 minus one float ulp and used to lose).
+_HEADING_COS = float(np.cos(np.pi / 4.0)) - 1e-9  # 45 degrees
+
+# Alignment preference INSIDE the cone: admitted departure/arrival offsets pay
+# `_ALIGN_K * (1 - cos(angle to the pinned heading))` cells of extra cost, so the route
+# prefers the offset CLOSEST to the exact heading (e.g. a rotated gizmo arrow) instead of
+# treating everything within the cone as equally good. At the 45-degree cone edge this is
+# ~3.5 cells of penalty — decisive unless the aligned departure is genuinely costly.
+_ALIGN_K = 12.0
 
 # 6-connectivity neighbour offsets (used for endpoint reachability / freeing).
 _NB6 = ((1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1))
@@ -366,6 +375,17 @@ class ExpandedLatticeBuilder:
         allowed_src = _cone_mask(start_heading)
         allowed_goal = _cone_mask(goal_heading)
 
+        def _align_pen(heading, oi):
+            """Extra cost (metres) for departing/arriving via offset oi when a heading is
+            pinned: 0 when perfectly aligned, growing with the angle inside the cone."""
+            if heading is None:
+                return 0.0
+            h = np.asarray(heading, dtype=np.float64)
+            n = np.linalg.norm(h)
+            if n <= 1e-9:
+                return 0.0
+            return frame.cell_size * _ALIGN_K * (1.0 - float(offs_dir[oi] @ (h / n)))
+
         # --- source -> first cell (no turn penalty; start has no entry heading) ---
         si, sj, sk = start_cell
         for oi in range(H):
@@ -384,19 +404,21 @@ class ExpandedLatticeBuilder:
                     break
             if not cut:
                 b_ord = int(cell_ord[ni, nj, nk])
-                base = step_len[oi] * (1.0 + float(soft[ni, nj, nk]))
+                base = (step_len[oi] * (1.0 + float(soft[ni, nj, nk]))
+                        + _align_pen(start_heading, oi))
                 src_parts.append(np.array([source_id], dtype=np.int64))
                 dst_parts.append(np.array([b_ord * H + oi], dtype=np.int64))
                 w_parts.append(np.array([base], dtype=np.float64))
 
-        # --- goal heading-nodes within the arrival cone -> sink (weight 0) ---
+        # --- goal heading-nodes within the arrival cone -> sink (alignment-weighted) ---
         g_ord = int(cell_ord[goal_cell])
         if g_ord >= 0:
             hs = np.nonzero(allowed_goal)[0].astype(np.int64)
             if hs.size:
                 src_parts.append(g_ord * H + hs)
                 dst_parts.append(np.full(hs.size, sink_id, dtype=np.int64))
-                w_parts.append(np.zeros(hs.size, dtype=np.float64))
+                w_parts.append(np.array([_align_pen(goal_heading, int(h)) for h in hs],
+                                        dtype=np.float64))
 
         if src_parts:
             # bulk parts are xp (device) arrays, source/sink parts are tiny numpy ones;

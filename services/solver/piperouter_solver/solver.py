@@ -11,6 +11,12 @@ from .models import RouteRequest, RouteResult, SolveReport
 
 # 6-neighbour steps for the nearest-free BFS used to rescue a buried endpoint.
 _BFS_STEPS = ((1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1))
+
+# Heading stub: a pinned start/end heading forces a STRAIGHT run of cells along the
+# heading before the route may bend (a connector's straight exit), sized from the
+# cable's min bend radius and clamped to this range. Shortened when geometry blocks it.
+_STUB_MIN_CELLS = 2
+_STUB_MAX_CELLS = 6
 # 6-connected structuring element for radius dilations of routed-wire masks.
 _ST6 = ndimage.generate_binary_structure(3, 1)
 
@@ -136,7 +142,46 @@ class Solver:
             planner_extra = prior
             blocked = reloc_blocked
 
-        all_cells: list[tuple[int, int, int]] = []
+        # HEADING STUB: a pinned heading means the cable must LEAVE/ARRIVE along that
+        # direction for a real distance, not one voxel — otherwise a cheap 90-degree turn
+        # right after the first cell defeats the point of the arrow. March up to a
+        # min-bend-radius worth of FREE cells along the heading, force them as the path's
+        # straight prefix (start) / suffix (end), and route from the stub's far end (still
+        # heading-pinned there, so the hand-off into free routing stays gentle). The stub
+        # shortens gracefully wherever geometry/clearance blocks the runway.
+        def _stub_cells(anchor, heading, sign):
+            if heading is None or cell <= 0:
+                return []
+            h = np.asarray(heading, dtype=np.float64)
+            n = float(np.linalg.norm(h))
+            if n <= 1e-9:
+                return []
+            h = h / n
+            want = int(round((req.wire.min_bend_radius_mm / 1000.0) / cell))
+            want = max(_STUB_MIN_CELLS, min(want, _STUB_MAX_CELLS))
+            out: list[tuple[int, int, int]] = []
+            a = np.asarray(anchor, dtype=np.float64)
+            anchor_t = tuple(int(v) for v in anchor)
+            for t in range(1, want + 1):
+                c = tuple(int(round(v)) for v in (a + sign * h * t))
+                if c == anchor_t or (out and c == out[-1]):
+                    continue
+                if not _in_bounds(blocked, c) or blocked[c]:
+                    break
+                out.append(c)
+            return out
+
+        start_stub = _stub_cells(cell_seq[0], req.start_heading, +1)
+        # arrival stub is marched BACKWARD from the goal against the travel direction
+        end_stub = _stub_cells(cell_seq[-1], req.end_heading, -1)
+        orig_start = tuple(int(v) for v in cell_seq[0])
+        orig_goal = tuple(int(v) for v in cell_seq[-1])
+        if start_stub:
+            cell_seq[0] = start_stub[-1]      # route FROM the stub's far end
+        if end_stub:
+            cell_seq[-1] = end_stub[-1]       # route TO the arrival stub's far end
+
+        all_cells: list[tuple[int, int, int]] = list(start_stub)
         wp_cell_idx: list[int] = []   # index in all_cells of each waypoint's cell
         n_legs = len(cell_seq) - 1
         # Heading continuity across legs: each leg leaves a waypoint along the heading it
@@ -159,6 +204,27 @@ class Solver:
                     planner_extra, clearance_m=0.0, start_heading=None,
                     goal_heading=gh,
                 )
+            if leg is None and li == 0 and start_stub:
+                # the departure runway dead-ends (stub far end boxed in) — drop the
+                # stub and route from the original start; the heading still gates the
+                # first step, so this degrades to the pre-stub behaviour, not a failure.
+                start_stub = []
+                cell_seq[0] = orig_start
+                a = orig_start
+                all_cells = []
+                leg = self._solve_leg(
+                    planner, stack, req.wire, req.weights, req.connectivity, a, b,
+                    planner_extra, clearance_m=0.0, start_heading=sh, goal_heading=gh,
+                )
+            if leg is None and li == n_legs - 1 and end_stub:
+                # same graceful degradation for a boxed-in arrival runway
+                end_stub = []
+                cell_seq[-1] = orig_goal
+                b = orig_goal
+                leg = self._solve_leg(
+                    planner, stack, req.wire, req.weights, req.connectivity, a, b,
+                    planner_extra, clearance_m=0.0, start_heading=sh, goal_heading=gh,
+                )
             if leg is None:
                 # diagnose against PRIOR WIRES + the real clearance (not the shell folded
                 # into extra), so "overlaps another already-routed wire" is only said when
@@ -179,6 +245,12 @@ class Solver:
             if li < n_legs - 1 and all_cells:
                 wp_cell_idx.append(len(all_cells) - 1)   # this leg ended at a waypoint
 
+        # append the forced arrival run: effective goal -> ... -> the original goal cell
+        suffix_begin = None
+        if end_stub:
+            suffix_begin = len(all_cells)
+            all_cells.extend(list(reversed(end_stub[:-1])) + [orig_goal])
+
         # Build the world polyline. Anchor it to the ACTUAL endpoint markers (the start
         # cell isn't in all_cells — the source links to a NEIGHBOUR of it — and markers
         # sit at sub-cell positions, so otherwise the tube looks detached). Replace each
@@ -191,13 +263,31 @@ class Solver:
             if k < len(req.waypoints):
                 cell_world[ci] = np.asarray(req.waypoints[k], dtype=np.float64)
 
+        # Stub cells snap onto the EXACT heading ray from the marker (voxel centres can
+        # sit up to half a cell off the arrow line), and the stubs' far ends become
+        # pass-through-fixed points so smoothing keeps the straight run straight.
+        stub_fixed: set[int] = set()
+        if start_stub:
+            hs = np.asarray(req.start_heading, dtype=np.float64)
+            hs = hs / np.linalg.norm(hs)
+            for i in range(len(start_stub)):
+                cell_world[i] = start_world + hs * cell * (i + 1)
+            stub_fixed.add(len(start_stub) - 1)
+        if suffix_begin is not None:
+            he = np.asarray(req.end_heading, dtype=np.float64)
+            he = he / np.linalg.norm(he)
+            last = len(all_cells) - 1
+            for idx in range(suffix_begin, len(all_cells)):
+                cell_world[idx] = end_world - he * cell * (last - idx)
+            stub_fixed.add(suffix_begin - 1)   # the leg's final cell = the stub's far end
+
         # Anchor to the markers — or, when an endpoint was buried, to the open point we
         # relocated it to (start_world / end_world), so the tube ends in free space.
         pts = [start_world]
         flags = [True]
         for j, p in enumerate(cell_world):
             pts.append(p)
-            flags.append(j in wpset)
+            flags.append(j in wpset or j in stub_fixed)
         pts.append(end_world)
         flags.append(True)
 

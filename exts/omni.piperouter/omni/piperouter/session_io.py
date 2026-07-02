@@ -10,7 +10,9 @@ Only JSON-safe fields are kept — omni.ui widget handles stored on the live wir
 """
 from __future__ import annotations
 
-SCHEMA_VERSION = 1
+# v2: octree_lattice became the default global planner. Sessions saved at v1 with
+# "lattice" recorded the OLD default, not a deliberate choice — the panel migrates them.
+SCHEMA_VERSION = 2
 
 _WIRE_KEYS = (
     "key", "name", "type_index", "type_id", "weights", "waypoints", "wp_slots",

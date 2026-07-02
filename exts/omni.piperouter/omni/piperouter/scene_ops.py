@@ -167,6 +167,100 @@ def get_world_pos(stage, path):
     return np.array([t[0], t[1], t[2]])
 
 
+def get_world_axis(stage, path, local_axis=(1.0, 0.0, 0.0)):
+    """World-space unit vector of a prim's `local_axis` (rotation only, scale stripped).
+    Reads a marker's heading from how the user rotated it. None if the prim is missing
+    or the axis degenerates."""
+    prim = stage.GetPrimAtPath(path)
+    if not prim or not prim.IsValid():
+        return None
+    try:
+        cache = UsdGeom.XformCache(Usd.TimeCode.Default())
+        v = cache.GetLocalToWorldTransform(prim).TransformDir(
+            Gf.Vec3d(*[float(x) for x in local_axis]))
+        n = float(v.GetLength())
+        if n < 1e-9:
+            return None
+        return np.array([v[0] / n, v[1] / n, v[2] / n])
+    except Exception:
+        return None
+
+
+def aim_quat(direction, local_axis=(1.0, 0.0, 0.0)):
+    """Quaternion rotating `local_axis` onto world `direction` (shortest arc), for
+    pointing a marker's heading arrow along a chosen vector."""
+    d = Gf.Vec3d(*[float(x) for x in direction])
+    if d.GetLength() < 1e-9:
+        return Gf.Quatf(1.0)
+    a = Gf.Vec3d(*[float(x) for x in local_axis]).GetNormalized()
+    return Gf.Quatf(Gf.Rotation(a, d.GetNormalized()).GetQuat())
+
+
+def _author_heading_arrow(stage, path, length, color, incoming=False):
+    """An arrow along the parent's LOCAL +X (shaft + two head strokes) as a child prim,
+    so it inherits the marker's translate+orient - rotating the marker aims the arrow.
+
+    incoming=False (START): drawn FROM the marker outward - "the cable leaves this way".
+    incoming=True  (END):   drawn approaching the marker with the tip AT it - "the cable
+    arrives along this arrow". Both point in local +X (the travel direction the solver
+    reads); only where the strokes sit relative to the marker differs."""
+    crv = UsdGeom.BasisCurves.Define(stage, path)
+    L = float(length)
+    h = L * 0.25
+    if incoming:
+        pts = [Gf.Vec3f(-L, 0.0, 0.0), Gf.Vec3f(0.0, 0.0, 0.0),
+               Gf.Vec3f(0.0, 0.0, 0.0), Gf.Vec3f(-h, h * 0.6, 0.0),
+               Gf.Vec3f(0.0, 0.0, 0.0), Gf.Vec3f(-h, -h * 0.6, 0.0)]
+    else:
+        pts = [Gf.Vec3f(0.0, 0.0, 0.0), Gf.Vec3f(L, 0.0, 0.0),
+               Gf.Vec3f(L, 0.0, 0.0), Gf.Vec3f(L - h, h * 0.6, 0.0),
+               Gf.Vec3f(L, 0.0, 0.0), Gf.Vec3f(L - h, -h * 0.6, 0.0)]
+    crv.GetPointsAttr().Set(pts)
+    crv.GetCurveVertexCountsAttr().Set([2, 2, 2])
+    crv.GetTypeAttr().Set(UsdGeom.Tokens.linear)
+    crv.GetWrapAttr().Set(UsdGeom.Tokens.nonperiodic)
+    crv.GetWidthsAttr().Set([L * 0.06] * 6)
+    crv.SetWidthsInterpolation(UsdGeom.Tokens.vertex)
+    crv.GetDisplayColorAttr().Set([Gf.Vec3f(float(color[0]), float(color[1]), float(color[2]))])
+    return crv
+
+
+def set_marker_direction(stage, path, direction=None, show=True,
+                         color=(0.95, 0.8, 0.15), incoming=False):
+    """Show/aim a heading arrow on a start/end marker.
+
+    Ensures the marker carries an xformOp:orient (so Kit's rotate manipulator can spin
+    it) and an arrow child at `{path}/dir` along local +X. `direction` (world vector)
+    re-aims the orient; None keeps the current rotation. show=False removes the arrow
+    (the orient op stays, harmless). Returns True if the marker exists."""
+    prim = stage.GetPrimAtPath(path)
+    if not prim or not prim.IsValid():
+        return False
+    xf = UsdGeom.Xformable(prim)
+    ops = [o for o in xf.GetOrderedXformOps() if o.GetOpType() == UsdGeom.XformOp.TypeOrient]
+    op = ops[0] if ops else xf.AddOrientOp(UsdGeom.XformOp.PrecisionFloat)
+    if direction is not None:
+        op.Set(aim_quat(direction))
+    elif not ops:
+        op.Set(Gf.Quatf(1.0))
+    arrow_path = f"{path}/dir"
+    if show:
+        # arrow sized from the marker sphere so it reads at scene scale
+        r = 0.03
+        try:
+            attr = UsdGeom.Sphere(prim).GetRadiusAttr()
+            if attr and attr.HasValue():
+                r = float(attr.Get())
+        except Exception:
+            pass
+        _author_heading_arrow(stage, arrow_path, r * 3.5, color, incoming=incoming)
+    else:
+        ap = stage.GetPrimAtPath(arrow_path)
+        if ap and ap.IsValid():
+            stage.RemovePrim(ap.GetPath())
+    return True
+
+
 def marker_positions(stage):
     """World positions of every marker (start/end/waypoint) under MARKERS_SCOPE, so
     the voxel grid can be framed to include them (markers dragged beyond the scene

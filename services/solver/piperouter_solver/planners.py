@@ -640,6 +640,26 @@ class OctreeLatticeGlobal(_GridPlannerBase):
             r = self.band
             pts = list(corridor) + [tuple(int(v) for v in start_cell),
                                     tuple(int(v) for v in goal_cell)]
+
+            # The corridor is computed heading-blind; a pinned departure/arrival heading
+            # may point OUT of its band, forcing an immediate kink back (or a fallback).
+            # Cover the heading's runway too: a ray of cells leaving the start along
+            # start_heading, and approaching the goal along goal_heading.
+            def _heading_ray(cell_ijk, heading, sign):
+                if heading is None:
+                    return
+                h = np.asarray(heading, dtype=np.float64)
+                n = np.linalg.norm(h)
+                if n <= 1e-9:
+                    return
+                h = h / n
+                c = np.asarray(cell_ijk, dtype=np.float64)
+                for t in range(1, 3 * r + 1):
+                    p = c + sign * h * t
+                    pts.append(tuple(int(round(v)) for v in p))
+
+            _heading_ray(start_cell, start_heading, +1)   # runway leaving the start
+            _heading_ray(goal_cell, goal_heading, -1)     # approach into the goal
             for ci, cj, ck in pts:                       # dilate the corridor into a band
                 band[max(0, ci - r):min(nx, ci + r + 1),
                      max(0, cj - r):min(ny, cj + r + 1),
