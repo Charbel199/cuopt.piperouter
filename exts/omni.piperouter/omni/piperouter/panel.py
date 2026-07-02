@@ -295,9 +295,10 @@ class PipeRouterPanel:
                                                    "Smooth (26)")
                 with ui.HStack(height=0):
                     ui.Label("Safety clearance (m)", width=self._LBL,
-                             tooltip="Extra gap kept from meshes ON TOP of the wire's "
-                                     "radius. 0 = the route may run flush against a "
-                                     "surface (just won't intersect it).")
+                             tooltip="DEFAULT extra gap kept from meshes ON TOP of the "
+                                     "wire's radius, for objects without a clearance tag. "
+                                     "Tag individual objects (Tagging section) for "
+                                     "per-object distances. 0 = flush routing allowed.")
                     self._clearance = ui.FloatField()
                     self._clearance.model.set_value(0.0)
                 with ui.HStack(height=0):
@@ -589,7 +590,7 @@ class PipeRouterPanel:
         self._schedule(bundles=True, wires=True, inspector=True)
 
     def _section_tagging(self):
-        with ui.CollapsableFrame("Tagging (thermal / EM)", collapsed=True):
+        with ui.CollapsableFrame("Tagging (thermal / EM / clearance)", collapsed=True):
             with ui.VStack(spacing=4, height=0):
                 ui.Label("Select a prim in the stage, set values, then Tag:",
                          style={"color": 0xFF999999})
@@ -598,6 +599,11 @@ class PipeRouterPanel:
                     self._temp = ui.FloatField()
                     ui.Label("EM", width=30)
                     self._em = ui.FloatField()
+                    ui.Label("Clr mm", width=50,
+                             tooltip="Per-object safety clearance (mm): routes keep this "
+                                     "distance from THIS object. Untagged objects use the "
+                                     "global Safety clearance. 0 = untagged.")
+                    self._clr_tag = ui.FloatField()
                     ui.Button("Tag", width=60, height=_BTN_H, clicked_fn=self._on_tag)
                 ui.Separator()
                 ui.Label("Tagged prims:", style={"color": 0xFF999999})
@@ -606,6 +612,7 @@ class PipeRouterPanel:
 
     _TEMP_COLOR = 0xFF4466EE   # warm red-orange (thermal)
     _EM_COLOR = 0xFFCCAA33     # teal-gold (EM)
+    _CLR_COLOR = 0xFF55CC55    # green (clearance)
 
     def _rebuild_tags(self):
         if self._window is None:
@@ -620,9 +627,11 @@ class PipeRouterPanel:
             for t in tags:
                 has_t = t["temp_c"] is not None
                 has_e = t["em"] is not None
+                has_c = t.get("clearance_m") is not None
                 name = t["path"].rsplit("/", 1)[-1]
-                # presence dot: warm if thermal, teal if EM-only
-                dot = self._TEMP_COLOR if has_t else self._EM_COLOR
+                # presence dot: warm if thermal, teal if EM, green if clearance-only
+                dot = (self._TEMP_COLOR if has_t
+                       else self._EM_COLOR if has_e else self._CLR_COLOR)
                 with ui.HStack(height=0, spacing=6):
                     ui.Rectangle(width=10, height=10, tooltip=t["path"],
                                  style={"background_color": dot, "border_radius": 5})
@@ -631,6 +640,8 @@ class PipeRouterPanel:
                              style={"color": self._TEMP_COLOR})
                     ui.Label(f"EM {t['em']:.2f}" if has_e else "", width=64,
                              style={"color": self._EM_COLOR})
+                    ui.Label(f"clr {t['clearance_m'] * 1000:.0f}mm" if has_c else "",
+                             width=76, style={"color": self._CLR_COLOR})
                     ui.Spacer()
                     ui.Button("Locate", width=58, height=_MINI_H,
                               clicked_fn=lambda p=t["path"]: self._api.select_prim(p))
@@ -2341,7 +2352,9 @@ class PipeRouterPanel:
     def _on_tag(self):
         temp = self._temp.model.get_value_as_float()
         em = self._em.model.get_value_as_float()
-        err = self._api.write_tag(temp if temp != 0.0 else None, em if em != 0.0 else None)
+        clr_mm = self._clr_tag.model.get_value_as_float()
+        err = self._api.write_tag(temp if temp != 0.0 else None, em if em != 0.0 else None,
+                                  clearance_m=(clr_mm / 1000.0) if clr_mm > 0.0 else None)
         self._progress.text = err if err else "tagged selection"
         if not err:
             self._schedule(tags=True)

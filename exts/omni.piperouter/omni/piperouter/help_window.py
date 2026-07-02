@@ -58,10 +58,12 @@ _SECTIONS = [
         "Members fan out from the trunk to their own endpoints.",
         "Bundles can carry their own waypoints and follow the bundle's constraints.",
     ]),
-    ("Heat & EM tags", [
-        "In 'Tagging', select a part, set a temperature (°C) or EM strength, click Tag.",
-        "Cables then prefer to route around it.",
-        "Cells hotter than a wire's rating become hard keep-outs.",
+    ("Heat / EM / clearance tags", [
+        "In 'Tagging', select a part, set a temperature (°C), EM strength, or a "
+        "per-object clearance (mm), then click Tag.",
+        "Cables route around heat and EM, and keep each tagged object's own distance.",
+        "Untagged objects use the global Safety clearance; cells hotter than a wire's "
+        "rating become hard keep-outs.",
     ]),
     ("See what's happening", [
         "Per-wire Debug view: claimed cells, grid-vs-smooth, soft-cost terrain, or bend heatmap.",

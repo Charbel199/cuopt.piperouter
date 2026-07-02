@@ -116,13 +116,26 @@ class Solver:
             if n:
                 notes.append(n)
 
-        # clearance shell, WAIVED in a ball around every terminal the route must touch:
-        # start, END, and each WAYPOINT (a user-pinned point near a surface is just as
-        # legitimate a terminal as a connector — without this, a waypoint inside the
+        # clearance shell, PER OBJECT: geometry with a clearance tag keeps ITS distance
+        # (clearance_values by class), untagged geometry keeps the request default. The
+        # shell is WAIVED in a ball around every terminal the route must touch: start,
+        # END, and each WAYPOINT (a user-pinned point near a surface is just as
+        # legitimate a terminal as a connector — without this, a point inside the
         # clearance band made the whole wire no_path).
-        if clr > 0.0:
-            shell = stack.dilate_occupancy(radius + clr).astype(bool) & ~hard
-            er = (int(np.ceil(clr / cell)) + 1) if cell > 0 else 1
+        cvals = list(getattr(stack, "clearance_values", ()) or ())
+        has_cls = getattr(stack, "clearance_class", None) is not None and cvals
+        max_clr = max([clr] + cvals) if (clr > 0.0 or cvals) else 0.0
+        if max_clr > 0.0:
+            if has_cls:
+                shell = np.zeros(hard.shape, dtype=bool)
+                if clr > 0.0:
+                    shell |= stack.dilate_class(0, radius + clr)       # untagged: default
+                for i, v in enumerate(cvals):
+                    shell |= stack.dilate_class(i + 1, radius + float(v))  # tagged: its own
+            else:
+                shell = stack.dilate_occupancy(radius + clr).astype(bool).copy()
+            shell &= ~hard
+            er = (int(np.ceil(max_clr / cell)) + 1) if cell > 0 else 1
             nx, ny, nz = hard.shape
             for c in cell_seq:                     # start, waypoints..., end (post-rescue)
                 ci, cj, ck = (int(c[0]), int(c[1]), int(c[2]))

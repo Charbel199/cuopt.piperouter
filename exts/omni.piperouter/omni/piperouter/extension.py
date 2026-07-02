@@ -286,12 +286,21 @@ class PipeRouterExtension(omni.ext.IExt):
             ambient = 20.0
 
             if mode == "occupancy":
-                # show mesh + the clearance halo (re-dilate the raw occ by the clearance)
+                # show mesh + the clearance halo: untagged geometry dilated by the global
+                # default, each clearance-TAGGED class dilated by its own distance.
+                from . import grid_io
                 occ_disp = occ > 0
-                cc = int(clr / float(cell) + 0.5) if cell else 0
-                if cc > 0:
-                    from . import grid_io
-                    occ_disp = grid_io.dilate_mask(occ_disp, cc).astype(bool)
+                cc_data = getattr(s, "last_clearance_classes", None)
+                cgrid = cc_data[0] if cc_data else None
+                cvals = cc_data[1] if cc_data else []
+                base = occ_disp & (cgrid == 0) if cgrid is not None else occ_disp
+                dflt = int(clr / float(cell) + 0.5) if cell else 0
+                halo = grid_io.dilate_mask(base, dflt).astype(bool) if dflt > 0 else base
+                occ_disp = occ_disp | halo
+                for i, v in enumerate(cvals):
+                    ci = int(float(v) / float(cell) + 0.5) if cell else 0
+                    m = cgrid == (i + 1)
+                    occ_disp |= grid_io.dilate_mask(m, ci).astype(bool) if ci > 0 else m
                 mask, vals, lo = occ_disp, None, 0.0   # prohibited voxels (mesh + clearance)
             elif mode == "thermal":
                 mask, vals, lo = thermal > ambient + 0.5, thermal, ambient
@@ -580,7 +589,7 @@ class PipeRouterExtension(omni.ext.IExt):
             carb.log_info(f"[piperouter] cleared tag on {path}")
         return None
 
-    def write_tag(self, temp_c, em):
+    def write_tag(self, temp_c, em, clearance_m=None):
         stage = self._get_stage()
         sel = omni.usd.get_context().get_selection().get_selected_prim_paths()
         if not sel:
@@ -588,8 +597,9 @@ class PipeRouterExtension(omni.ext.IExt):
         for p in sel:
             prim = stage.GetPrimAtPath(p)
             if prim and prim.IsValid():
-                scene_ops.write_tags(prim, temp_c=temp_c, em=em)
-        carb.log_info(f"[piperouter] tagged {len(sel)} prim(s): temp_c={temp_c}, em={em}")
+                scene_ops.write_tags(prim, temp_c=temp_c, em=em, clearance_m=clearance_m)
+        carb.log_info(f"[piperouter] tagged {len(sel)} prim(s): temp_c={temp_c}, em={em}, "
+                      f"clearance_m={clearance_m}")
         return None
 
     def on_shutdown(self):

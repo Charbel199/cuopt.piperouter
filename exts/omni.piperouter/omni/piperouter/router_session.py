@@ -128,6 +128,27 @@ class RouterSession:
         # to the solver in each route request (no longer baked here).
         self.last_clearance_m = float(clearance_m)
 
+        # PER-OBJECT clearance (customer: minimum distance per component category):
+        # prims tagged with CLEARANCE_ATTR are voxelized per distinct value into a class
+        # grid; the solver keeps each class's own distance, untagged geometry uses the
+        # global default above. Ascending order so the LARGEST clearance wins on overlap.
+        cls_grid = np.zeros(tuple(int(r) for r in res), dtype=np.uint8)
+        cls_values: list[float] = []
+        groups: dict[float, list] = {}
+        for prim in prims:
+            c = scene_ops.clearance_for_prim(prim)
+            if c is not None and c > 0.0:
+                groups.setdefault(round(float(c), 6), []).append(prim)
+        for val in sorted(groups):
+            gpts, gidx = voxelizer.collect_meshes(stage, groups[val])
+            if len(gpts) == 0:
+                continue
+            gocc, _gsd = voxelizer.voxelize(
+                np.asarray(gpts, dtype=np.float32) * mpu, gidx, gbmin, cell, res)
+            cls_values.append(float(val))
+            cls_grid[gocc.astype(bool)] = len(cls_values)   # class ids are 1-based
+        self.last_clearance_classes = (cls_grid, cls_values) if cls_values else None
+
         # Thermal / EM fields: each tagged prim becomes a source at its bbox centre.
         # The field radiates over `char_size + FIELD_MARGIN_M` so a big hot block heats
         # a region proportional to its size (a fixed falloff vanished once the scene
@@ -168,7 +189,10 @@ class RouterSession:
         path = self.grid_dir / session_id / "stack.npz"
         path.parent.mkdir(parents=True, exist_ok=True)
         t_save = time.perf_counter()
-        grid_io.save_grids(path, gbmin, cell, res, occ, sd, thermal, em)
+        cc = getattr(self, "last_clearance_classes", None)
+        grid_io.save_grids(path, gbmin, cell, res, occ, sd, thermal, em,
+                           clearance_class=cc[0] if cc else None,
+                           clearance_values=cc[1] if cc else None)
         log.info("[piperouter] grid handoff saved in %.0fms", (time.perf_counter() - t_save) * 1e3)
         self.frame = (gbmin, cell, res)
         self.last_grids = (gbmin, cell, res, occ, sd, thermal, em)  # + sd for debug views

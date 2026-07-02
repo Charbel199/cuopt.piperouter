@@ -13,6 +13,7 @@ MARKERS_SCOPE = PIPEROUTER_ROOT + "/markers"
 DEBUG_SCOPE = PIPEROUTER_ROOT + "/debug"
 TEMP_ATTR = "piperouter:temp_c"
 EM_ATTR = "piperouter:em_strength"
+CLEARANCE_ATTR = "piperouter:clearance_m"   # per-object safety clearance (metres)
 SESSION_KEY = "piperouterSession"   # customData key holding the embedded panel session
 
 
@@ -583,31 +584,50 @@ def read_thermal_em_tags(stage):
     return out
 
 
-def write_tags(prim, temp_c=None, em=None):
+def write_tags(prim, temp_c=None, em=None, clearance_m=None):
     if temp_c is not None:
         prim.CreateAttribute(TEMP_ATTR, Sdf.ValueTypeNames.Float).Set(float(temp_c))
     if em is not None:
         prim.CreateAttribute(EM_ATTR, Sdf.ValueTypeNames.Float).Set(float(em))
+    if clearance_m is not None:
+        prim.CreateAttribute(CLEARANCE_ATTR, Sdf.ValueTypeNames.Float).Set(float(clearance_m))
 
 
 def list_tagged_prims(stage):
-    """Every prim carrying a thermal and/or EM tag: [{path, temp_c|None, em|None}]."""
+    """Every prim carrying a thermal / EM / clearance tag:
+    [{path, temp_c|None, em|None, clearance_m|None}]."""
     out = []
     for prim in stage.Traverse():
         t = prim.GetAttribute(TEMP_ATTR)
         e = prim.GetAttribute(EM_ATTR)
+        c = prim.GetAttribute(CLEARANCE_ATTR)
         has_t = bool(t) and t.IsValid() and t.HasAuthoredValue()
         has_e = bool(e) and e.IsValid() and e.HasAuthoredValue()
-        if has_t or has_e:
+        has_c = bool(c) and c.IsValid() and c.HasAuthoredValue()
+        if has_t or has_e or has_c:
             out.append({"path": str(prim.GetPath()),
                         "temp_c": float(t.Get()) if has_t else None,
-                        "em": float(e.Get()) if has_e else None})
+                        "em": float(e.Get()) if has_e else None,
+                        "clearance_m": float(c.Get()) if has_c else None})
     return out
 
 
+def clearance_for_prim(prim):
+    """Effective per-object clearance for a mesh: the CLEARANCE_ATTR authored on the
+    prim itself or its NEAREST tagged ancestor (users usually tag the component Xform,
+    whose meshes live below it). None = untagged (the global default applies)."""
+    p = prim
+    while p and p.IsValid():
+        a = p.GetAttribute(CLEARANCE_ATTR)
+        if a and a.IsValid() and a.HasAuthoredValue():
+            return float(a.Get())
+        p = p.GetParent()
+    return None
+
+
 def clear_tags(prim):
-    """Remove the thermal/EM tags from a prim."""
-    for attr in (TEMP_ATTR, EM_ATTR):
+    """Remove the thermal/EM/clearance tags from a prim."""
+    for attr in (TEMP_ATTR, EM_ATTR, CLEARANCE_ATTR):
         a = prim.GetAttribute(attr)
         if a and a.IsValid() and a.HasAuthoredValue():
             prim.RemoveProperty(attr)

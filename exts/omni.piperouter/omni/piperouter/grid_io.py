@@ -43,7 +43,12 @@ def dilate_mask(mask, cells):
 
 
 def save_grids(path, bounds_min, cell_size, res_xyz, occupancy, surface_dist,
-               thermal, em) -> None:
+               thermal, em, clearance_class=None, clearance_values=None) -> None:
+    extra = {}
+    if clearance_class is not None and clearance_values:
+        # per-object clearance: class grid (0 = untagged) + metres per class id (1-based)
+        extra["clearance_class"] = np.asarray(clearance_class, dtype=np.uint8)
+        extra["clearance_values"] = np.asarray(clearance_values, dtype=np.float64)
     np.savez_compressed(
         path,
         bounds_min=np.asarray(bounds_min, dtype=np.float64),
@@ -53,4 +58,5 @@ def save_grids(path, bounds_min, cell_size, res_xyz, occupancy, surface_dist,
         surface_dist=np.asarray(surface_dist, dtype=np.float32),
         thermal=np.asarray(thermal, dtype=np.float32),
         em=np.asarray(em, dtype=np.float32),
+        **extra,
     )

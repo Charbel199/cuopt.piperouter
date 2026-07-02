@@ -401,3 +401,25 @@ def test_wire_in_two_bundles_routes_through_both_trunks(solver_server):
     # each wire's polyline is long enough to span the full route (B1 + B2 + branches)
     for wn in ("wa", "wb"):
         assert len(by_id[wn]["polyline"]) >= 4
+
+
+def test_clearance_tag_builds_class_grid(cube_stage):
+    # tagging a prim with a per-object clearance produces a clearance-class grid that
+    # marks that prim's voxels and carries the value (the solver keeps that distance).
+    prim = cube_stage.GetPrimAtPath("/World/Obstacle")
+    scene_ops.write_tags(prim, clearance_m=0.15)
+    session = RouterSession()
+    _gb, _cell, _res, occ, _sd, _th, _em = session.compute_grids(cube_stage, resolution=24)
+    cc = session.last_clearance_classes
+    assert cc is not None
+    cls_grid, vals = cc
+    assert vals == [0.15]
+    tagged = cls_grid == 1
+    assert tagged.any()                         # the cube's voxels are classed
+    assert (tagged & (occ.astype(bool))).sum() == tagged.sum()  # classes lie on occupancy
+
+
+def test_untagged_scene_has_no_class_grid(cube_stage):
+    session = RouterSession()
+    session.compute_grids(cube_stage, resolution=24)
+    assert session.last_clearance_classes is None
