@@ -135,8 +135,9 @@ class RouterSession:
         cls_grid = np.zeros(tuple(int(r) for r in res), dtype=np.uint8)
         cls_values: list[float] = []
         groups: dict[float, list] = {}
+        proxy_tags = scene_ops.read_proxy_tags(stage)
         for prim in prims:
-            c = scene_ops.clearance_for_prim(prim)
+            c = scene_ops.clearance_for_prim(prim, proxy_tags=proxy_tags)
             if c is not None and c > 0.0:
                 groups.setdefault(round(float(c), 6), []).append(prim)
         for val in sorted(groups):

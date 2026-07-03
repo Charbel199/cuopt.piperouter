@@ -135,10 +135,23 @@ class Solver:
             else:
                 shell = stack.dilate_occupancy(radius + clr).astype(bool).copy()
             shell &= ~hard
-            er = (int(np.ceil(max_clr / cell)) + 1) if cell > 0 else 1
+            # Waive the shell around each terminal by the MINIMUM needed for
+            # reachability: the BFS distance from the terminal to the nearest cell
+            # OUTSIDE the band (+1). A terminal outside every band gets NO waiver.
+            # The old fixed max-clearance box exempted a large region around every
+            # terminal, which made wires connected to (or ending near) a tagged
+            # component look like they ignored its clearance entirely.
             nx, ny, nz = hard.shape
+            esc = shell | hard
             for c in cell_seq:                     # start, waypoints..., end (post-rescue)
                 ci, cj, ck = (int(c[0]), int(c[1]), int(c[2]))
+                if not (_in_bounds(shell, (ci, cj, ck)) and shell[ci, cj, ck]):
+                    continue                       # terminal not inside a band -> no waiver
+                out = _nearest_free_cell(esc, (ci, cj, ck))
+                if out is None:
+                    er = (int(np.ceil(max_clr / cell)) + 1) if cell > 0 else 1
+                else:
+                    er = max(abs(out[0] - ci), abs(out[1] - cj), abs(out[2] - ck)) + 1
                 shell[max(0, ci - er):min(nx, ci + er + 1),
                       max(0, cj - er):min(ny, cj + er + 1),
                       max(0, ck - er):min(nz, ck + er + 1)] = False

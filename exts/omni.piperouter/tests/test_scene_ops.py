@@ -146,3 +146,43 @@ def test_tag_source_uses_box_center_not_origin():
     assert temp == 120.0
     assert np.allclose(center, [5.0, 5.0, 1.0], atol=1e-3)   # NOT the origin
     assert char > 1.0                                        # ~half the bbox diagonal
+
+
+def test_tagging_an_instance_proxy_tags_exactly_that_prim():
+    # Greyed-out prims in instanced CAD are INSTANCE PROXIES - USD forbids authoring
+    # attributes on them, so proxy tags go into a path-keyed registry (customData on the
+    # PipeRouter root). The tag applies to EXACTLY the selected prim: the same part in a
+    # SIBLING instance stays untagged, and nothing is written on the parent/instance.
+    from pxr import Usd, UsdGeom
+    stage = Usd.Stage.CreateInMemory()
+    UsdGeom.Xform.Define(stage, "/World")
+    UsdGeom.Xform.Define(stage, "/Protos/part")
+    UsdGeom.Mesh.Define(stage, "/Protos/part/Mesh")
+    for name in ("a", "b"):
+        inst = UsdGeom.Xform.Define(stage, f"/World/{name}").GetPrim()
+        inst.GetReferences().AddInternalReference("/Protos/part")
+        inst.SetInstanceable(True)
+
+    proxies = [p for p in stage.Traverse(Usd.TraverseInstanceProxies())
+               if p.IsA(UsdGeom.Mesh) and p.IsInstanceProxy()]
+    proxy_a = next(p for p in proxies if str(p.GetPath()).startswith("/World/a"))
+    proxy_b = next(p for p in proxies if str(p.GetPath()).startswith("/World/b"))
+
+    # tagging the PROXY must not raise, and must not author on the instance root
+    scene_ops.write_tags(proxy_a, clearance_m=0.05, temp_c=90.0)
+    root_a = stage.GetPrimAtPath("/World/a")
+    assert not root_a.GetAttribute(scene_ops.CLEARANCE_ATTR).HasAuthoredValue()
+
+    # the reader resolves the proxy's own path from the registry
+    assert abs(scene_ops.clearance_for_prim(proxy_a) - 0.05) < 1e-9
+    # the SIBLING instance's identical part is NOT tagged
+    assert scene_ops.clearance_for_prim(proxy_b) is None
+
+    # it shows in the tag list, feeds the thermal reader, and clears cleanly
+    listed = {t["path"]: t for t in scene_ops.list_tagged_prims(stage)}
+    assert str(proxy_a.GetPath()) in listed
+    assert listed[str(proxy_a.GetPath())]["temp_c"] == 90.0
+    assert any(t == 90.0 for (_c, t, _e, _s) in scene_ops.read_thermal_em_tags(stage))
+    scene_ops.clear_tags(proxy_a)
+    assert scene_ops.clearance_for_prim(proxy_a) is None
+    assert str(proxy_a.GetPath()) not in {t["path"] for t in scene_ops.list_tagged_prims(stage)}

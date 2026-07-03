@@ -581,16 +581,76 @@ def read_thermal_em_tags(stage):
                     float(t.Get()) if has_t else None,
                     float(e.Get()) if has_e else None,
                     char_size))
+
+    # instance-proxy tags (registry): stage.Traverse() above skips proxies, so there is
+    # no double-count. Reading proxies (bbox/xform) is allowed — only authoring isn't.
+    for path, entry in read_proxy_tags(stage).items():
+        if entry.get("temp_c") is None and entry.get("em") is None:
+            continue
+        prim = stage.GetPrimAtPath(path)
+        if not prim or not prim.IsValid():
+            continue
+        rng = bbox.ComputeWorldBound(prim).ComputeAlignedRange()
+        if rng.IsEmpty():
+            tr = xform.GetLocalToWorldTransform(prim).ExtractTranslation()
+            center = np.array([tr[0], tr[1], tr[2]], dtype=float)
+            char_size = 0.0
+        else:
+            mn, mx = rng.GetMin(), rng.GetMax()
+            lo = np.array([mn[0], mn[1], mn[2]], dtype=float)
+            hi = np.array([mx[0], mx[1], mx[2]], dtype=float)
+            center = 0.5 * (lo + hi)
+            char_size = 0.5 * float(np.linalg.norm(hi - lo))
+        out.append((center, entry.get("temp_c"), entry.get("em"), char_size))
     return out
 
 
+PROXY_TAGS_KEY = "piperouterProxyTags"   # customData: {proxy path -> {temp_c, em, clearance_m}}
+
+
+def read_proxy_tags(stage):
+    """Tags for INSTANCE-PROXY prims. USD forbids authoring attributes on proxies (their
+    geometry lives once in a shared prototype), so proxy tags are stored by PATH in
+    customData on the PipeRouter root — the tag applies to EXACTLY the selected prim,
+    not its parent/instance, and the same part in another instance stays untagged."""
+    prim = stage.GetPrimAtPath(PIPEROUTER_ROOT)
+    if not prim or not prim.IsValid():
+        return {}
+    raw = prim.GetCustomDataByKey(PROXY_TAGS_KEY)
+    if not raw:
+        return {}
+    try:
+        return json.loads(raw)
+    except Exception:
+        return {}
+
+
+def _write_proxy_tags(stage, tags: dict):
+    root = UsdGeom.Scope.Define(stage, PIPEROUTER_ROOT)
+    root.GetPrim().SetCustomDataByKey(PROXY_TAGS_KEY, json.dumps(tags))
+
+
 def write_tags(prim, temp_c=None, em=None, clearance_m=None):
+    if prim.IsInstanceProxy():
+        stage = prim.GetStage()
+        tags = read_proxy_tags(stage)
+        entry = tags.get(str(prim.GetPath()), {})
+        if temp_c is not None:
+            entry["temp_c"] = float(temp_c)
+        if em is not None:
+            entry["em"] = float(em)
+        if clearance_m is not None:
+            entry["clearance_m"] = float(clearance_m)
+        tags[str(prim.GetPath())] = entry
+        _write_proxy_tags(stage, tags)
+        return prim
     if temp_c is not None:
         prim.CreateAttribute(TEMP_ATTR, Sdf.ValueTypeNames.Float).Set(float(temp_c))
     if em is not None:
         prim.CreateAttribute(EM_ATTR, Sdf.ValueTypeNames.Float).Set(float(em))
     if clearance_m is not None:
         prim.CreateAttribute(CLEARANCE_ATTR, Sdf.ValueTypeNames.Float).Set(float(clearance_m))
+    return prim
 
 
 def list_tagged_prims(stage):
@@ -609,15 +669,33 @@ def list_tagged_prims(stage):
                         "temp_c": float(t.Get()) if has_t else None,
                         "em": float(e.Get()) if has_e else None,
                         "clearance_m": float(c.Get()) if has_c else None})
+    # instance-proxy tags live in the registry (skip entries whose prim disappeared)
+    for path, entry in read_proxy_tags(stage).items():
+        prim = stage.GetPrimAtPath(path)
+        if prim and prim.IsValid():
+            out.append({"path": path,
+                        "temp_c": entry.get("temp_c"),
+                        "em": entry.get("em"),
+                        "clearance_m": entry.get("clearance_m")})
     return out
 
 
-def clearance_for_prim(prim):
+def clearance_for_prim(prim, proxy_tags=None):
     """Effective per-object clearance for a mesh: the CLEARANCE_ATTR authored on the
     prim itself or its NEAREST tagged ancestor (users usually tag the component Xform,
-    whose meshes live below it). None = untagged (the global default applies)."""
+    whose meshes live below it), or — for instance proxies — the proxy-tag registry
+    entry for the prim's (or an ancestor's) exact path. None = untagged.
+    `proxy_tags`: pass read_proxy_tags(stage) when calling in a loop; None = read here."""
+    if proxy_tags is None:
+        try:
+            proxy_tags = read_proxy_tags(prim.GetStage())
+        except Exception:
+            proxy_tags = {}
     p = prim
     while p and p.IsValid():
+        entry = proxy_tags.get(str(p.GetPath()))
+        if entry and entry.get("clearance_m") is not None:
+            return float(entry["clearance_m"])
         a = p.GetAttribute(CLEARANCE_ATTR)
         if a and a.IsValid() and a.HasAuthoredValue():
             return float(a.Get())
@@ -626,7 +704,14 @@ def clearance_for_prim(prim):
 
 
 def clear_tags(prim):
-    """Remove the thermal/EM/clearance tags from a prim."""
+    """Remove the thermal/EM/clearance tags from a prim (instance proxies clear their
+    registry entry, mirroring write_tags)."""
+    if prim.IsInstanceProxy():
+        stage = prim.GetStage()
+        tags = read_proxy_tags(stage)
+        if tags.pop(str(prim.GetPath()), None) is not None:
+            _write_proxy_tags(stage, tags)
+        return
     for attr in (TEMP_ATTR, EM_ATTR, CLEARANCE_ATTR):
         a = prim.GetAttribute(attr)
         if a and a.IsValid() and a.HasAuthoredValue():

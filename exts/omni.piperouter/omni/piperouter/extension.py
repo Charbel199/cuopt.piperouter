@@ -594,10 +594,15 @@ class PipeRouterExtension(omni.ext.IExt):
         sel = omni.usd.get_context().get_selection().get_selected_prim_paths()
         if not sel:
             return "select a prim in the stage first"
-        for p in sel:
-            prim = stage.GetPrimAtPath(p)
-            if prim and prim.IsValid():
-                scene_ops.write_tags(prim, temp_c=temp_c, em=em, clearance_m=clearance_m)
+        try:
+            for p in sel:
+                prim = stage.GetPrimAtPath(p)
+                if prim and prim.IsValid():
+                    scene_ops.write_tags(prim, temp_c=temp_c, em=em,
+                                         clearance_m=clearance_m)
+        except Exception as exc:  # noqa: BLE001
+            carb.log_error(f"[piperouter] tagging failed: {exc}")
+            return f"tagging failed: {exc}"
         carb.log_info(f"[piperouter] tagged {len(sel)} prim(s): temp_c={temp_c}, em={em}, "
                       f"clearance_m={clearance_m}")
         return None
