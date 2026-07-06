@@ -1,12 +1,14 @@
-# omni.piperouter
+# omni.piperouter - the Accelerated 3D Routing extension
 
-Constraint-aware wire / pipe routing for automotive USD, inside Omniverse Kit
-(USD Composer, Isaac Sim, or any kit-app-template app).
+GPU-accelerated, constraint-aware 3D routing of **cables and pipes** in automotive USD,
+inside Omniverse Kit (USD Composer, Isaac Sim, or any kit-app-template app). Part of the
+[accelerated-3d-routing](https://github.com/Charbel199/accelerated-3d-routing) project.
 
-The extension reads the live USD stage, **voxelizes it with Warp in-process** (occupancy
-+ surface-distance + thermal + EM fields), hands the grids to a **cuGraph solver running
-in a Docker container**, and authors the returned routes as tubes — with a two-phase
-expert workflow: *Route All*, then *refine one wire at a time* with waypoints.
+The extension reads the live USD stage, **voxelizes it with NVIDIA Warp in-process**
+(occupancy + surface-distance + thermal + EM fields), hands the grids to an **NVIDIA
+cuGraph solver running in a Docker container** (scipy Dijkstra CPU fallback), and
+authors the returned routes as tubes - with a two-phase expert workflow: *Route All*,
+then *refine one wire at a time* with waypoints.
 
 ## Architecture
 
@@ -41,20 +43,20 @@ Only `extension.py` / `panel.py` import `omni.*`. Everything else is pure
 The panel is organized into collapsible sections: **Scene & Setup · Wires · Selected
 wire · Tagging · Output**, with a colored connection status line on top.
 
-- **Quick start:** click **Create sample scene** (Scene & Setup) — it builds a procedural
+- **Quick start:** click **Create sample scene** (Scene & Setup) - it builds a procedural
   mini engine-bay (ground, a firewall with a gap, a hot engine block, an EM component)
   and pre-places three wires (power / CAN / AC pipe). Then click **ROUTE ALL**.
-- **Phase A — Route All:** or click *+ Add wire* (spawns green start / red end markers),
+- **Phase A - Route All:** or click *+ Add wire* (spawns green start / red end markers),
   drag them in the viewport, pick a wire type, set the grid resolution, click
   **ROUTE ALL**. Routes appear as colored tubes; each wire row shows a status dot
   (green routed / red no-path / blue locked), its color swatch, and inline length/$; the
   BOM fills in under Output. Wires can be renamed and deleted per row.
-- **Phase B — Refine one wire:** click a wire to select it. Tune the soft-constraint
+- **Phase B - Refine one wire:** click a wire to select it. Tune the soft-constraint
   sliders (surface-hug / bend / thermal / EM), **+ Add waypoint** (drops a blue marker
-  the route must pass through), then **Re-route this wire** — only that wire re-solves,
+  the route must pass through), then **Re-route this wire** - only that wire re-solves,
   with every *Locked* wire treated as an obstacle. **Lock** it when happy.
 - **Tagging:** select a mesh/xform, enter a temperature °C and/or EM strength, click
-  *Tag* — writes `piperouter:temp_c` / `piperouter:em_strength` onto the prim (persisted
+  *Tag* - writes `piperouter:temp_c` / `piperouter:em_strength` onto the prim (persisted
   in the USD). These drive the thermal/EM cost fields on the next solve.
 - **Overlay:** toggle *Show occupancy overlay* to see the voxelized obstacles.
 - **Export BOM:** writes `<path>.json` and `<path>.csv`.
@@ -68,12 +70,12 @@ bend/turn penalty (scaled by `min_bend_radius_mm`). Wire types live in
 
 ## Tests
 ```bash
-cd exts/omni.piperouter && <repo>/.venv/bin/pytest -p no:pqm -q   # 16 headless tests
+cd exts/omni.piperouter && <repo>/.venv/bin/pytest -p no:pqm -q   # 88 headless tests
 ```
 The `omni.ui` panel itself is verified by loading the extension in a real Kit runtime.
 
-## Notes / phase 2
+## Notes / follow-ups
 - USD writes happen on the main thread (Route All briefly blocks the UI); moving the
   voxelize+solve off-thread with progress is a follow-up.
-- Phase 2 hooks: cuSolver curvature smoothing, cuOpt multi-wire bundling, hierarchical
-  -corridor lattice (Option 2), real thermal/EM field solves.
+- Roadmap candidates: design-space keep-in zones, drag-to-edit local re-solve, raceway
+  corridors, bundle-diameter formula, real thermal/EM field solves.

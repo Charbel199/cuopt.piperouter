@@ -5,13 +5,13 @@ scene_ops.write_session) so a single Save carries the WHOLE session: geometry,
 markers and route tubes live in the stage already; this captures the panel's logical
 state (wire/bundle definitions, weights, waypoint order, headings, settings).
 
-Only JSON-safe fields are kept — omni.ui widget handles stored on the live wire dicts
+Only JSON-safe fields are kept - omni.ui widget handles stored on the live wire dicts
 (combo, name_model, _swatch) are dropped here and rebuilt when the panel redraws.
 """
 from __future__ import annotations
 
 # v2: octree_lattice became the default global planner. Sessions saved at v1 with
-# "lattice" recorded the OLD default, not a deliberate choice — the panel migrates them.
+# "lattice" recorded the OLD default, not a deliberate choice - the panel migrates them.
 SCHEMA_VERSION = 2
 
 _WIRE_KEYS = (

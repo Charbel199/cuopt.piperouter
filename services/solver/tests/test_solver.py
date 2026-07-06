@@ -86,7 +86,7 @@ def test_endpoint_on_surface_still_routes(empty_stack):
 
 
 def test_route_interior_never_enters_clearance_zone():
-    # the route's interior cells must all be OUTSIDE the (radius+clearance) keep-out —
+    # the route's interior cells must all be OUTSIDE the (radius+clearance) keep-out -
     # clearance is hard. (Endpoints may sit on a surface, so they're excluded.)
     from piperouter_solver.grids import GridStack
     from piperouter_solver.models import GridFrame
@@ -114,7 +114,7 @@ def test_clearance_does_not_relocate_a_near_surface_endpoint(empty_stack):
     start = tuple(s.frame.grid_to_world((4, 5, 1)))
     end = tuple(s.frame.grid_to_world((0, 5, 1)))
     # clearance 0.25 m puts the start inside the wall's clearance BAND (but not the mesh).
-    # Clearance must NOT relocate it (only the mesh does) — it routes from the real start,
+    # Clearance must NOT relocate it (only the mesh does) - it routes from the real start,
     # passing through the near-surface clearance voxels, with no relocation note.
     res = Solver().route_one(s, RouteRequest(wire=_wire(), start=start, end=end,
                                              connectivity=26, clearance_m=0.25))

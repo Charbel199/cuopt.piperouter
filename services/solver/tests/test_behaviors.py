@@ -82,7 +82,7 @@ def test_bend_slider_straightens_route(empty_stack):
 def test_waypoint_join_is_not_a_sharp_turn(empty_stack):
     # start east of a waypoint, then the route must head north-east to the end. With
     # heading continuity across legs, the path leaves the waypoint along its arrival
-    # heading and bends gradually — no free sharp turn at the join.
+    # heading and bends gradually - no free sharp turn at the join.
     s = empty_stack
     wp = (5, 0, 1)
     res = Solver().route_one(

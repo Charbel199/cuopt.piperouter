@@ -12,7 +12,7 @@ import math
 def bundle_diameter(outer_diameters_mm: list[float]) -> float:
     """Circular-packing estimate: sqrt(sum of d^2).
 
-    Gives the diameter of a circle whose area equals the sum of member areas —
+    Gives the diameter of a circle whose area equals the sum of member areas -
     a practical harness-sizing shortcut used in automotive design.
     """
     if not outer_diameters_mm:
@@ -62,7 +62,7 @@ def trunk_spec(member_specs: list[dict], bundle_id: str) -> dict:
 
     Uses the maximum min_bend_radius (stiffest member), minimum max_temp_c
     (strictest thermal limit), and bundle_diameter for the outer diameter.
-    Cost/mass are set to 0 — the trunk BOM row is computed separately by summing
+    Cost/mass are set to 0 - the trunk BOM row is computed separately by summing
     member costs over the trunk length.
     """
     od = bundle_diameter([s["outer_diameter_mm"] for s in member_specs])

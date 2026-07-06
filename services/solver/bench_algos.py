@@ -1,5 +1,5 @@
 """Algorithm comparison harness: run every GLOBAL x LOCAL combination over the same
-fixture wires on the complex scene and print a scored table — so picking algorithms is a
+fixture wires on the complex scene and print a scored table - so picking algorithms is a
 measurement, not an opinion.
 
 Metrics per combo: success rate, avg route length, worst (max) turn angle = gentleness,

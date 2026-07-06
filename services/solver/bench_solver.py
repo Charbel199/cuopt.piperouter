@@ -1,4 +1,4 @@
-"""Solver-only GPU benchmark — NO extension / Warp / pxr deps, so it runs INSIDE the
+"""Solver-only GPU benchmark - NO extension / Warp / pxr deps, so it runs INSIDE the
 solver container where cupy + cuGraph are installed (and on the dev box if cupy is present).
 It loads a pre-saved voxel grid (the same GridStack the extension hands off on disk) plus a
 list of endpoint cells, then times each global planner. Reports which GPU backend is live.

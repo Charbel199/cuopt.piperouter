@@ -25,7 +25,7 @@ def test_every_local_optimizer_pins_endpoints_and_stays_free(empty_stack):
 
     for name, cls in optimizers.LOCAL_OPTIMIZERS.items():
         out = cls().optimize(poly, frame, blocked, wire, None, None, 1.0, fixed)
-        # (fibre may densify the path, so don't assert the count — assert the invariants)
+        # (fibre may densify the path, so don't assert the count - assert the invariants)
         assert len(out) >= 2, f"{name}: degenerate output"
         assert np.allclose(out[0], poly[0]) and np.allclose(out[-1], poly[-1]), \
             f"{name}: moved a pinned endpoint"

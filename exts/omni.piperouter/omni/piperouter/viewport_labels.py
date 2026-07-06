@@ -4,7 +4,7 @@ Draws a small text label (waypoint order number 1..N, plus S/E for the wire's
 endpoints) anchored at given world positions, following the active viewport
 camera. This is GUI-only and viewport-API dependent, so EVERY Kit call is
 guarded: if the viewport API is absent or differs, the extension still loads and
-routes — it just shows no labels (a [piperouter] warning is logged). Mirrors the
+routes - it just shows no labels (a [piperouter] warning is logged). Mirrors the
 defensive style of the camera helper. UNVERIFIED in a live GUI.
 
 Usage:
@@ -49,7 +49,7 @@ class ViewportOrderLabels:
             self._vp_api = vpw.viewport_api
             self._vp_api.add_scene_view(self._scene_view)
             return True
-        except Exception as exc:  # noqa: BLE001 — viewport API varies across Kit
+        except Exception as exc:  # noqa: BLE001 - viewport API varies across Kit
             carb.log_warn(f"[piperouter] viewport order-labels unavailable: {exc}")
             self._scene_view = None
             self._frame = None

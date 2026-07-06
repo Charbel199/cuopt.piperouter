@@ -1,4 +1,4 @@
-"""Pluggable GLOBAL planners — find a coarse, collision-free path of grid cells from a
+"""Pluggable GLOBAL planners - find a coarse, collision-free path of grid cells from a
 start cell to a goal cell. Swappable for evaluation (see bench_algos.py); the default
 'lattice' is the proven heading-aware expanded-lattice + SSSP, the others are different
 families (plain grid A*, Eikonal-style cost-to-go descent, sampling-based RRT-Connect)
@@ -49,7 +49,7 @@ def _nearest_free(blocked, cell, max_r=2):
 
 
 class LatticeGlobal:
-    """Heading-expanded lattice + SSSP (the production default — bend-aware)."""
+    """Heading-expanded lattice + SSSP (the production default - bend-aware)."""
     name = "lattice"
 
     def __init__(self):
@@ -307,7 +307,7 @@ class RRTGlobal(_GridPlannerBase):
             # try to connect tree B to the new node of A
             ci = extend(tb, pb, ta[gi])
             if ci is not None and tb[ci] == ta[gi]:
-                # joined — reconstruct a -> join, then join -> b
+                # joined - reconstruct a -> join, then join -> b
                 left = []
                 k = gi
                 while k != -1:
@@ -342,7 +342,7 @@ def leaf_adjacency(leaf_of, n_leaves):
     """Face-adjacency of octree free leaves, VECTORIZED. Compares each axis's
     neighbouring slabs (`leaf_of[:-1] vs leaf_of[1:]`) to find boundary cells whose two
     sides belong to different free leaves, dedups the (lo,hi) pairs, and builds the
-    adjacency from the UNIQUE edges. O(grid) in numpy + O(edges) in Python — replaces the
+    adjacency from the UNIQUE edges. O(grid) in numpy + O(edges) in Python - replaces the
     old O(free-voxels) Python loop that made octree_lattice blow up at high resolution."""
     adj = {}
     pa, pb = [], []
@@ -370,7 +370,7 @@ def leaf_adjacency(leaf_of, n_leaves):
 def octree_leaves(blocked):
     """Subdivide `blocked` into octree free leaves. Returns (ranges, leaf_of): ranges =
     list of (i0,i1,j0,j1,k0,k1) free-leaf boxes; leaf_of[i,j,k] = leaf id or -1. Geometry
-    only — independent of soft costs / prior routes, so it can be cached per scene."""
+    only - independent of soft costs / prior routes, so it can be cached per scene."""
     blocked = np.asarray(blocked, dtype=bool)
     nx, ny, nz = blocked.shape
     leaf_of = np.full(blocked.shape, -1, dtype=np.int64)
@@ -430,7 +430,7 @@ def octree_corridor(ranges, leaf_of, adj, start_cell, goal_cell, leaf_soft=None)
         for nb in adj.get(lid, ()):
             # distance, biased by the destination leaf's soft cost so the corridor heads
             # toward cheap cells (e.g. hugs surfaces, avoids heat/EM) instead of always
-            # taking the open-air geometric shortest — which is what defeated surface-hug.
+            # taking the open-air geometric shortest - which is what defeated surface-hug.
             step = float(np.linalg.norm(ctr(nb) - ctr(lid)))
             soft_nb = float(leaf_soft[nb]) if leaf_soft is not None else 0.0
             ng = g[lid] + step * (1.0 + soft_nb)
@@ -456,7 +456,7 @@ def octree_corridor(ranges, leaf_of, adj, start_cell, goal_cell, leaf_soft=None)
 
 class OctreeGlobal(_GridPlannerBase):
     """Adaptive-resolution planner. Recursively subdivides the grid into an octree: a leaf
-    is kept whole when it is uniformly free or uniformly blocked, and split otherwise — so
+    is kept whole when it is uniformly free or uniformly blocked, and split otherwise - so
     open air is a few big cells and only surfaces/narrow gaps get fine cells. A* runs over
     the (much smaller) free-leaf adjacency graph; the path between two face-adjacent free
     leaves is collision-free, so we rasterize leaf-centre to leaf-centre back to cells."""
@@ -549,7 +549,7 @@ class OctreeGlobal(_GridPlannerBase):
 class MedialGlobal(_GridPlannerBase):
     """Clearance-seeking corridor planner (medial-axis flavour). Uses the Euclidean
     distance-to-obstacle field and runs A* with an edge cost that penalizes low-clearance
-    cells, so the route is pulled onto the high-clearance 'spine' of free space — maximally
+    cells, so the route is pulled onto the high-clearance 'spine' of free space - maximally
     clear of hot/EM/mesh, like routing along the medial axis."""
     name = "medial"
 
@@ -596,7 +596,7 @@ class OctreeLatticeGlobal(_GridPlannerBase):
     """Hierarchical octree + heading lattice. The octree finds a cheap coarse corridor;
     then the FULL bend-aware lattice runs only in a band of fine cells around that corridor
     (cells outside the band are masked as obstacles, so the lattice expands a fraction of
-    the volume — ~10x fewer nodes at high res). This keeps the lattice's min-bend / gentle
+    the volume - ~10x fewer nodes at high res). This keeps the lattice's min-bend / gentle
     routing exactly, while the octree prunes the open-air search. Falls back to the full
     lattice if the band is too tight, so it is never worse than `lattice` on coverage."""
     name = "octree_lattice"
@@ -608,8 +608,8 @@ class OctreeLatticeGlobal(_GridPlannerBase):
     def _scene_octree(self, stack, wire, clearance_m):
         """Geometry-only octree (leaves + leaf_of + adjacency), CACHED on the stack per
         (wire-radius + clearance) so a Route All reuses it across wires instead of
-        rebuilding per wire. Prior routes are NOT in here — they're enforced by the fine
-        lattice pass below — which is why this cache stays valid for the whole scene."""
+        rebuilding per wire. Prior routes are NOT in here - they're enforced by the fine
+        lattice pass below - which is why this cache stays valid for the whole scene."""
         cell = float(stack.frame.cell_size)
         rad_cells = int(round((wire.radius_m + clearance_m) / cell)) if cell > 0 else 0
         cache = stack.__dict__.setdefault("_octree_cache", {})
@@ -623,7 +623,7 @@ class OctreeLatticeGlobal(_GridPlannerBase):
              extra_obstacles, clearance_m, start_heading, goal_heading):
         ranges, leaf_of, adj = self._scene_octree(stack, wire, clearance_m)
         # per-leaf mean soft cost (surface-hug / thermal / EM) so the coarse corridor is
-        # pulled toward the cells the route actually wants — vectorized, leaves are cached.
+        # pulled toward the cells the route actually wants - vectorized, leaves are cached.
         soft = fields.soft_cost_field(stack, wire, weights)
         flat = leaf_of.ravel()
         m = flat >= 0
@@ -665,7 +665,7 @@ class OctreeLatticeGlobal(_GridPlannerBase):
                      max(0, cj - r):min(ny, cj + r + 1),
                      max(0, ck - r):min(nz, ck + r + 1)] = True
             # lattice restricted to the band: cells OUTSIDE the band become obstacles, AND
-            # prior routes (extra_obstacles) stay obstacles — so the final route is
+            # prior routes (extra_obstacles) stay obstacles - so the final route is
             # collision-correct against the other wires even though the cached octree wasn't.
             outside = ~band
             if extra_obstacles is not None:

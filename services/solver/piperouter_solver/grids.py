@@ -33,7 +33,7 @@ class GridStack:
 
         CACHED per dilation-cell count (occupancy is immutable for a stack's
         lifetime, and route_one/planners call this several times per wire with the
-        same radii). Treat the returned array as READ-ONLY — every current caller
+        same radii). Treat the returned array as READ-ONLY - every current caller
         copies via .astype() or combines with `|`/`&` into a new array.
         """
         # +1e-9 keeps the round-half-up boundary robust against float error
@@ -55,7 +55,7 @@ class GridStack:
 
     def dilate_class(self, class_id: int, dist_m: float) -> np.ndarray:
         """Dilate ONE clearance class's voxels by dist_m (class 0 = untagged occupancy).
-        Cached per (class_id, cells) — read-only, same convention as dilate_occupancy."""
+        Cached per (class_id, cells) - read-only, same convention as dilate_occupancy."""
         cells = int(dist_m / self.frame.cell_size + 0.5 + 1e-9)
         cache = self.__dict__.setdefault("_cls_dilate_cache", {})
         key = (int(class_id), cells)

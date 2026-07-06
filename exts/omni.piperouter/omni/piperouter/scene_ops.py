@@ -42,12 +42,12 @@ def list_collidable_meshes(stage, exclude_prefixes=(PIPEROUTER_ROOT,)):
     """Return all UsdGeom.Mesh prims outside the PipeRouter scope.
 
     Handles drag-dropped USD assets (Xform payloads) which arrive as unloaded
-    payloads — grayed-out in the Stage panel. We force-load every unloaded prim
+    payloads - grayed-out in the Stage panel. We force-load every unloaded prim
     before traversing so their mesh contents become visible.
 
     Also handles INSTANCED assets (CAD imports usually instance every repeated part:
     the geometry lives once under /Prototypes and the scene holds instanceable
-    references to it — Omniverse shows those meshes greyed out as read-only instance
+    references to it - Omniverse shows those meshes greyed out as read-only instance
     proxies). A plain stage.Traverse() skips inside instances entirely, so we traverse
     with Usd.TraverseInstanceProxies() to see the proxy meshes. Their points (prototype
     geometry) and world transforms (per-instance placement) read normally.
@@ -125,7 +125,7 @@ def spawn_marker(stage, path, position, color=(0.1, 0.9, 0.1), radius=0.03, opac
 def spawn_waypoint_marker(stage, path, position, color=(0.1, 0.5, 0.9), radius=0.05,
                           segments=24):
     """A see-through wireframe gizmo (three orthogonal rings) used for waypoints, so the
-    routed wire and the geometry behind it stay visible — unlike a solid sphere, and
+    routed wire and the geometry behind it stay visible - unlike a solid sphere, and
     unlike displayOpacity which the RTX viewport ignores without a translucent material.
 
     Draggable and readable exactly like spawn_marker: the translate op lives on the prim
@@ -345,7 +345,7 @@ _BOX_EDGES = ((0, 1), (1, 2), (2, 3), (3, 0), (4, 5), (5, 6), (6, 7), (7, 4),
 
 def author_box_wireframe(stage, path, boxes, colors=None, color=(0.3, 0.7, 1.0),
                          width=0.01):
-    """See-through wireframe boxes (12 edges each) as ONE BasisCurves — used to show the
+    """See-through wireframe boxes (12 edges each) as ONE BasisCurves - used to show the
     octree leaves without occluding the scene. `boxes` = list of (min_xyz, max_xyz) in
     STAGE units; `colors` (optional) = per-box RGB."""
     crv = UsdGeom.BasisCurves.Define(stage, path)
@@ -375,7 +375,7 @@ def author_box_wireframe(stage, path, boxes, colors=None, color=(0.3, 0.7, 1.0),
 
 
 def _author_blob_cloud(stage, path, points, size, colors=None, color=(0.2, 0.6, 1.0)):
-    """Render a point cloud as short fat BasisCurves stubs — one tiny 2-vertex linear
+    """Render a point cloud as short fat BasisCurves stubs - one tiny 2-vertex linear
     curve (width = size) per point. We use curves, NOT UsdGeom.Points, because the RTX
     viewport renders curves reliably while it routinely fails to draw Points at all
     (that's why the debug dot-clouds were invisible). Per-point color is supported via
@@ -456,7 +456,7 @@ def author_bend_heatmap(stage, wire_name, polyline, min_bend_radius_mm, cap=5_00
 
     The polyline is in METERS (solver space) so the curvature physics is correct;
     pos_scale converts the AUTHORED point positions back to stage units (1/metersPerUnit)
-    without disturbing the radius computation. width (STAGE units) sets the tube thickness —
+    without disturbing the radius computation. width (STAGE units) sets the tube thickness -
     pass the wire's real display diameter so the heatmap is to-scale (default ~legacy)."""
     import numpy as np
     pts = [np.asarray(p, dtype=np.float64) for p in polyline]
@@ -505,11 +505,11 @@ def author_bend_heatmap(stage, wire_name, polyline, min_bend_radius_mm, cap=5_00
             r_mm = (chord / (2.0 * np.sin(angle / 2.0))) * 1000.0
         ratio = r_mm / max(float(min_bend_radius_mm), 1.0)
         if ratio >= 1.5:
-            seg_colors.append((0.1, 0.85, 0.1))  # green — well within spec
+            seg_colors.append((0.1, 0.85, 0.1))  # green - well within spec
         elif ratio >= 0.8:
-            seg_colors.append((0.9, 0.7, 0.0))   # yellow — near limit
+            seg_colors.append((0.9, 0.7, 0.0))   # yellow - near limit
         else:
-            seg_colors.append((0.95, 0.1, 0.1))  # red — violating min bend
+            seg_colors.append((0.95, 0.1, 0.1))  # red - violating min bend
 
     step = max(1, len(pts) // cap)
     pts_sub = pts[::step]
@@ -565,7 +565,7 @@ def read_thermal_em_tags(stage):
 
         rng = bbox.ComputeWorldBound(prim).ComputeAlignedRange()
         if rng.IsEmpty():
-            # Prim has no geometry of its own (e.g. a bare Xform) — fall back to its
+            # Prim has no geometry of its own (e.g. a bare Xform) - fall back to its
             # world translation, with a zero characteristic size.
             tr = xform.GetLocalToWorldTransform(prim).ExtractTranslation()
             center = np.array([tr[0], tr[1], tr[2]], dtype=float)
@@ -583,7 +583,7 @@ def read_thermal_em_tags(stage):
                     char_size))
 
     # instance-proxy tags (registry): stage.Traverse() above skips proxies, so there is
-    # no double-count. Reading proxies (bbox/xform) is allowed — only authoring isn't.
+    # no double-count. Reading proxies (bbox/xform) is allowed - only authoring isn't.
     for path, entry in read_proxy_tags(stage).items():
         if entry.get("temp_c") is None and entry.get("em") is None:
             continue
@@ -611,7 +611,7 @@ PROXY_TAGS_KEY = "piperouterProxyTags"   # customData: {proxy path -> {temp_c, e
 def read_proxy_tags(stage):
     """Tags for INSTANCE-PROXY prims. USD forbids authoring attributes on proxies (their
     geometry lives once in a shared prototype), so proxy tags are stored by PATH in
-    customData on the PipeRouter root — the tag applies to EXACTLY the selected prim,
+    customData on the PipeRouter root - the tag applies to EXACTLY the selected prim,
     not its parent/instance, and the same part in another instance stays untagged."""
     prim = stage.GetPrimAtPath(PIPEROUTER_ROOT)
     if not prim or not prim.IsValid():
@@ -683,7 +683,7 @@ def list_tagged_prims(stage):
 def clearance_for_prim(prim, proxy_tags=None):
     """Effective per-object clearance for a mesh: the CLEARANCE_ATTR authored on the
     prim itself or its NEAREST tagged ancestor (users usually tag the component Xform,
-    whose meshes live below it), or — for instance proxies — the proxy-tag registry
+    whose meshes live below it), or - for instance proxies - the proxy-tag registry
     entry for the prim's (or an ancestor's) exact path. None = untagged.
     `proxy_tags`: pass read_proxy_tags(stage) when calling in a loop; None = read here."""
     if proxy_tags is None:

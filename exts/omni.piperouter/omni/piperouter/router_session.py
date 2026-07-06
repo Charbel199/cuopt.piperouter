@@ -24,7 +24,7 @@ log = logging.getLogger("piperouter")
 
 
 # Authored tubes render at least this thick so routes are visible at scene scale.
-# Purely cosmetic — BOM and clearance use the physical wire spec, not this.
+# Purely cosmetic - BOM and clearance use the physical wire spec, not this.
 MIN_DISPLAY_DIAMETER_M = 0.04
 
 # Thermal/EM fields radiate over (object characteristic size + this margin), with a
@@ -75,14 +75,14 @@ class RouterSession:
     def _display_diameter_m(self, real_diameter_m):
         """Tube display diameter (m) = the wire/pipe's TRUE physical gauge. The scene is at
         real scale, so we draw real thickness (a 1.3 mm wire is 1.3 mm, a 16 mm hose is
-        16 mm) — accurate and type-distinct. The tiny floor only avoids a zero/degenerate
+        16 mm) - accurate and type-distinct. The tiny floor only avoids a zero/degenerate
         tube (e.g. bundle types whose real thickness comes from the bundle-diameter
         formula, not a fixed gauge)."""
         return max(float(real_diameter_m), 0.0005)   # 0.5 mm guard against zero only
 
     def compute_grids(self, stage, resolution=64, pad_frac=0.05, clearance_m=0.0):
         """Read the stage and build the four voxel grids (occupancy, surface distance,
-        thermal, EM) IN MEMORY. occupancy is the RAW mesh (clearance is NOT baked in — the
+        thermal, EM) IN MEMORY. occupancy is the RAW mesh (clearance is NOT baked in - the
         solver applies it as a relaxable band, waived around endpoints, so it can tell a
         real mesh from a clearance halo). `clearance_m` is remembered for the route requests
         and for re-dilating the overlay/2D views at display time. Shared by voxelize_scene
@@ -90,7 +90,7 @@ class RouterSession:
 
         UNITS: the solver works in METERS. The stage may use any metersPerUnit (cm by
         default in Omniverse, mm for many CAD imports), so all geometry read from the
-        stage is multiplied by `mpu` (meters per stage unit) here — the resulting grid
+        stage is multiplied by `mpu` (meters per stage unit) here - the resulting grid
         (gbmin, cell) is in METERS. The route methods convert endpoints/polylines at the
         same boundary. self.mpu is cached for the authoring side.
 
@@ -122,7 +122,7 @@ class RouterSession:
         t_vox = time.perf_counter()
 
         # NOTE: the safety clearance is NO LONGER baked into the occupancy. occ stays the
-        # RAW mesh so the solver can tell mesh from clearance-halo — it relocates endpoints
+        # RAW mesh so the solver can tell mesh from clearance-halo - it relocates endpoints
         # only out of the real mesh, applies clearance as a relaxable band (waived around
         # endpoints), and the overlay re-dilates by this for display. Clearance now travels
         # to the solver in each route request (no longer baked here).
@@ -315,15 +315,15 @@ class RouterSession:
 
         Two-phase algorithm supporting wires that are in MULTIPLE bundles:
 
-        Phase 1 — route ALL trunks in bundle order. Each trunk's cells become
+        Phase 1 - route ALL trunks in bundle order. Each trunk's cells become
         obstacles for subsequent bundles so they don't collide.
 
-        Phase 2 — for each member wire, determine its complete segment sequence
+        Phase 2 - for each member wire, determine its complete segment sequence
         across ALL bundles it belongs to (in order), then route every individual
         (non-trunk) segment. Example for a wire in B1 then B2:
             wire_start -> B1_merge  [individual]
             B1_merge   -> B1_split  [trunk B1, already routed]
-            B1_split   -> B2_merge  [individual — between-bundle segment]
+            B1_split   -> B2_merge  [individual - between-bundle segment]
             B2_merge   -> B2_split  [trunk B2, already routed]
             B2_split   -> wire_end  [individual]
         Then stitch all segments + trunks into one continuous polyline and author
@@ -502,7 +502,7 @@ class RouterSession:
 
             # Route each non-trunk segment, collect results. Heading continuity is threaded
             # across segments so the branch joins the shared trunk (and leaves it) smoothly
-            # instead of kinking at merge/split — the same fix route_one does for waypoints.
+            # instead of kinking at merge/split - the same fix route_one does for waypoints.
             full_poly = []
             branch_len = 0.0
             failed = False

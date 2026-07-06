@@ -42,7 +42,7 @@ def angles_to_vector(azimuth_deg, elevation_deg, up_axis="Z"):
 
 
 def vector_to_angles(v, up_axis="Z"):
-    """(azimuth_deg, elevation_deg) of a world vector — inverse of angles_to_vector.
+    """(azimuth_deg, elevation_deg) of a world vector - inverse of angles_to_vector.
     A (near-)zero vector maps to (0, 0)."""
     f, s, u = _ground_axes(up_axis)
     x = sum(float(v[i]) * f[i] for i in range(3))

@@ -1,4 +1,4 @@
-"""omni.piperouter — constraint-aware wire/pipe routing for automotive USD.
+"""omni.piperouter - constraint-aware wire/pipe routing for automotive USD.
 
 The Kit entry point (`extension.py`) imports omni.* and is loaded only inside a
 Kit runtime; the import is guarded so the omni-free modules (grid_io, voxelizer,

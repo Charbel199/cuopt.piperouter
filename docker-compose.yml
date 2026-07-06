@@ -12,7 +12,7 @@ services:
     environment:
       - PIPEROUTER_GRID_DIR=/dev/shm/piperouter
       - WIRE_TYPES_PATH=/app/wire_types.json
-      # Build the routing graph on the GPU (cupy) and hand it to cuGraph zero-copy —
+      # Build the routing graph on the GPU (cupy) and hand it to cuGraph zero-copy -
       # ~2x faster route_all, no CPU->GPU edge transfer. Falls back to numpy if cupy is
       # unavailable. (Smoothing stays CPU; set PIPEROUTER_GPU_SMOOTH=1 to also GPU that.)
       - PIPEROUTER_GPU_BUILD=1

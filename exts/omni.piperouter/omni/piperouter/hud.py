@@ -1,9 +1,9 @@
-"""Viewport heads-up display — a semi-transparent stats box in the top-right corner
+"""Viewport heads-up display - a semi-transparent stats box in the top-right corner
 of the active viewport, styled like the Kit FPS counter.
 
 Shows two panels:
-  • Route Stats  — total cost / mass / length / wires-routed (updated after every Route All)
-  • Selected Wire — name, type, and current soft-weight sliders (updates when a wire is
+  • Route Stats  - total cost / mass / length / wires-routed (updated after every Route All)
+  • Selected Wire - name, type, and current soft-weight sliders (updates when a wire is
                     selected or its weights change)
 
 All viewport calls are guarded: if the viewport API is unavailable the HUD silently
@@ -51,7 +51,7 @@ class ViewportHUD:
     def update(self, stats: dict, selected_wire: dict | None):
         """Rebuild the HUD.
 
-        stats keys (all optional, show '—' if missing):
+        stats keys (all optional, show '-' if missing):
             total_cost, total_mass, total_length, n_routed, n_total, n_no_path
         selected_wire: the panel wire dict for the currently selected wire, or None.
         """
@@ -108,9 +108,9 @@ class ViewportHUD:
                     ("WIRES",  f"{n_r}/{n_t}"
                                + (f"  ({n_np} no-path)" if n_np else " routed"),
                      _WARN if n_np else _VALUE),
-                    ("COST",   f"${cost:.2f}"     if cost   is not None else "—", _VALUE),
-                    ("MASS",   f"{mass:.3f} kg"   if mass   is not None else "—", _VALUE),
-                    ("LENGTH", f"{length:.2f} m"  if length is not None else "—", _VALUE),
+                    ("COST",   f"${cost:.2f}"     if cost   is not None else "-", _VALUE),
+                    ("MASS",   f"{mass:.3f} kg"   if mass   is not None else "-", _VALUE),
+                    ("LENGTH", f"{length:.2f} m"  if length is not None else "-", _VALUE),
                 ]
                 for lbl, val, col in rows:
                     with ui2.HStack(height=28):

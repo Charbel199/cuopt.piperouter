@@ -347,7 +347,7 @@ class PipeRouterPanel:
                                      "font_size": 15})
 
     def _section_inspector(self):
-        # collapsed until something is selected (item #4) — _select / _select_bundle expand it
+        # collapsed until something is selected (item #4) - _select / _select_bundle expand it
         self._inspector_frame = ui.CollapsableFrame("Selected wire / bundle", collapsed=True)
         with self._inspector_frame:
             self._inspector = ui.VStack(spacing=4, height=0)
@@ -652,7 +652,7 @@ class PipeRouterPanel:
         self._api.clear_tag(path)
         self._schedule(tags=True)
 
-    # BOM table columns: (title, width_px, numeric?) — numeric columns are right-aligned
+    # BOM table columns: (title, width_px, numeric?) - numeric columns are right-aligned
     # and shared by header + rows + totals so everything lines up in a grid.
     _BOM_COLS = (("Wire", 116, False), ("Type", 124, False), ("Length", 66, True),
                  ("Mass", 60, True), ("Cost", 60, True), ("", 16, False))
@@ -724,7 +724,7 @@ class PipeRouterPanel:
                     ui.Label(f"   -> {reason}", word_wrap=True,
                              style={"color": _BAD, "font_size": 12})
             ui.Rectangle(height=1, style={"background_color": 0xFF444444})
-            # totals row — aligned to the same column grid as the rows above
+            # totals row - aligned to the same column grid as the rows above
             with ui.HStack(height=0, spacing=4):
                 ui.Label(f"TOTAL ({s['n_routed']} routed"
                          + (f", {s['n_no_path']} no-path" if s["n_no_path"] else "") + ")",
@@ -1133,7 +1133,7 @@ class PipeRouterPanel:
             int(settings.get("connectivity_idx", 2)))   # default Smooth (26)
         self._clearance.model.set_value(float(settings.get("clearance", 0.0)))
         # Legacy migration: pre-v2 sessions saved "lattice" because it was the OLD
-        # default, not a deliberate choice — bring them onto the new octree_lattice
+        # default, not a deliberate choice - bring them onto the new octree_lattice
         # default. Sessions saved at v2+ with "lattice" chose it and are respected.
         if int(data.get("version", 1)) < 2 and settings.get("global_algo") == "lattice":
             settings["global_algo"] = "octree_lattice"

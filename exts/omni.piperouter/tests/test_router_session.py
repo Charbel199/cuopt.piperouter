@@ -122,7 +122,7 @@ def test_selected_algorithm_flows_through_http(solver_server, cube_stage):
 
 
 def test_clearance_not_baked_into_occupancy(cube_stage):
-    # clearance is NO LONGER baked into occ — the grid is the raw mesh so the solver can
+    # clearance is NO LONGER baked into occ - the grid is the raw mesh so the solver can
     # tell mesh from clearance halo. occ is identical regardless of clearance; the value is
     # just remembered (and sent to the solver per route, applied as a relaxable band).
     session = RouterSession()   # compute_grids is local; no solver needed
@@ -268,7 +268,7 @@ def test_bundle_trunk_passes_through_its_waypoint(solver_server):
                            (1.0, 1.0, 0.5), radius=0.05)
     scene_ops.spawn_marker(stage, f"{scene_ops.MARKERS_SCOPE}/bW_split",
                            (3.0, 1.0, 0.5), radius=0.05)
-    # a waypoint pulled well off that line (+y) — the trunk must bend to reach it.
+    # a waypoint pulled well off that line (+y) - the trunk must bend to reach it.
     wp = (2.0, 2.2, 0.5)
     scene_ops.spawn_marker(stage, f"{scene_ops.MARKERS_SCOPE}/bW_wp0", wp, radius=0.05)
 
@@ -300,7 +300,7 @@ def test_bundle_trunk_passes_through_its_waypoint(solver_server):
 
 def test_bundled_member_honours_its_own_waypoint_before_the_trunk(solver_server):
     """A waypoint on a BUNDLED wire (slot 0 = before its bundle) must pull that member's
-    branch through the waypoint on the way INTO the trunk — previously ignored."""
+    branch through the waypoint on the way INTO the trunk - previously ignored."""
     from pxr import Usd
     from omni.piperouter.router_session import RouterSession
 
@@ -341,7 +341,7 @@ def test_bundled_member_honours_its_own_waypoint_before_the_trunk(solver_server)
 
 
 def test_wire_in_two_bundles_routes_through_both_trunks(solver_server):
-    """A wire in two bundles must visit B1_merge→B1_split then B2_merge→B2_split —
+    """A wire in two bundles must visit B1_merge→B1_split then B2_merge→B2_split -
     not skip the first bundle or re-route from the original start for B2."""
     from pxr import Usd
     from omni.piperouter.router_session import RouterSession

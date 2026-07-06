@@ -1,4 +1,4 @@
-"""Profile the lattice's GPU stages — edge-build (cupy) vs SSSP (cuGraph) — per wire, so
+"""Profile the lattice's GPU stages - edge-build (cupy) vs SSSP (cuGraph) - per wire, so
 we can see where a GPU win would have to come from. Solver-only (runs in the container).
 
     PIPEROUTER_GPU_BUILD=1 python3 bench_gpu_stages.py <grid.npz> <endpoints.json>

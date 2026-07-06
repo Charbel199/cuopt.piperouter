@@ -1,9 +1,9 @@
 [package]
 version = "0.5.0"
-title = "PipeRouter"
-description = "Constraint-aware wire/pipe routing for automotive USD (cuGraph + Warp)."
+title = "PipeRouter - Accelerated 3D Routing"
+description = "GPU-accelerated, constraint-aware 3D routing of cables and pipes in automotive USD scenes. Voxelizes the stage with NVIDIA Warp and solves routes with NVIDIA cuGraph shortest paths."
 category = "Simulation"
-keywords = ["wiring", "piping", "routing", "usd", "cugraph", "warp"]
+keywords = ["routing", "cables", "pipes", "harness", "usd", "cugraph", "warp"]
 authors = ["NVIDIA"]
 
 [dependencies]

@@ -60,7 +60,7 @@ def test_rrt_is_deterministic(empty_stack):
 
 def test_octree_lattice_respects_prior_routes(empty_stack):
     # the cached octree is geometry-only, so prior wires (extra_obstacles) must still be
-    # avoided by the FINE lattice pass — this is the correctness guarantee for Route All.
+    # avoided by the FINE lattice pass - this is the correctness guarantee for Route All.
     s = empty_stack
     wire = _wire()
     a, b = (0, 5, 1), (9, 5, 1)

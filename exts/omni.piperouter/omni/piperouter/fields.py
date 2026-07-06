@@ -28,7 +28,7 @@ wins, like real radiant heat); EM sources SUM (multiple emitters add up). A real
 conduction / EM solve can replace this without changing the grid contract.
 
 IMPORTANT: each source carries its OWN falloff (see router_session) so a big hot
-engine block heats a much larger region than a small connector — a single global
+engine block heats a much larger region than a small connector - a single global
 falloff made heat invisible once the sample scene was scaled up.
 """
 from __future__ import annotations
@@ -85,7 +85,7 @@ def thermal_field(bounds_min, cell_size, res_xyz, sources, ambient=20.0):
 
     We subtract ambient before splatting and add it back inside splat_field so the
     field equals `temp_c` exactly at the source and decays to `ambient` (20 °C) far
-    away — e.g. a 120 °C block reads 120 at its center, 20 a `falloff_m` away.
+    away - e.g. a 120 °C block reads 120 at its center, 20 a `falloff_m` away.
     """
     adjusted = [(pos, float(temp) - ambient, falloff) for pos, temp, falloff in sources]
     return splat_field(bounds_min, cell_size, res_xyz, adjusted, ambient=ambient, mode="max")

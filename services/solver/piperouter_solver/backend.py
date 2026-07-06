@@ -17,7 +17,7 @@ def _log_sssp_backend(name):
         if name == "cugraph":
             _log.info("[piperouter] SSSP backend: cuGraph (GPU)")
         else:
-            _log.warning("[piperouter] SSSP backend: scipy Dijkstra (CPU) — cuGraph not "
+            _log.warning("[piperouter] SSSP backend: scipy Dijkstra (CPU) - cuGraph not "
                          "available; route search will be much slower. Install "
                          "cugraph-cu12 in the solver image for the GPU path.")
 
@@ -78,7 +78,7 @@ def _cugraph_sssp(src, dst, weight, n_nodes, source_id, sink_id):
 
     # Pull the result columns to host arrays ONCE, then index by vertex. The old code
     # did res.loc[node, "predecessor"] per path node, and each cudf .loc is a GPU kernel
-    # + sync — ~100ms/route just for reconstruction. A single to_numpy() + array lookup
+    # + sync - ~100ms/route just for reconstruction. A single to_numpy() + array lookup
     # is ~5-6x faster and identical.
     verts = res["vertex"].to_numpy()
     dist = res["distance"].to_numpy()
@@ -101,7 +101,7 @@ def _cugraph_sssp(src, dst, weight, n_nodes, source_id, sink_id):
 def _walk_predecessors(pred_of, sink_id, source_id):
     """Rebuild sink->source by following predecessors; reverse to source->sink.
 
-    Returns None if the chain dead-ends (predecessor -1) before reaching the source —
+    Returns None if the chain dead-ends (predecessor -1) before reaching the source -
     i.e. the sink is unreachable. cuGraph marks unreachable vertices with a large FINITE
     sentinel distance (not inf) + predecessor -1, so the distance check alone can miss
     it; this catch prevents returning a bogus straight-through "route"."""

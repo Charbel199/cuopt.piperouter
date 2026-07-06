@@ -34,7 +34,7 @@ _HEADING_COS = float(np.cos(np.pi / 4.0)) - 1e-9  # 45 degrees
 # `_ALIGN_K * (1 - cos(angle to the pinned heading))` cells of extra cost, so the route
 # prefers the offset CLOSEST to the exact heading (e.g. a rotated gizmo arrow) instead of
 # treating everything within the cone as equally good. At the 45-degree cone edge this is
-# ~3.5 cells of penalty — decisive unless the aligned departure is genuinely costly.
+# ~3.5 cells of penalty - decisive unless the aligned departure is genuinely costly.
 _ALIGN_K = 12.0
 
 # 6-connectivity neighbour offsets (used for endpoint reachability / freeing).
@@ -154,19 +154,19 @@ def diagnose_no_path(stack, wire, connectivity, start_cell, goal_cell,
             counts["clearance"] += 1
     dom = max(counts, key=counts.get) if any(counts.values()) else None
     if dom == "thermal":
-        return (f"No clear corridor — heat above this {wire.kind}'s {wire.max_temp_c:.0f}C "
+        return (f"No clear corridor - heat above this {wire.kind}'s {wire.max_temp_c:.0f}C "
                 f"rating blocks the direct path. Add a waypoint to route around the hot "
                 f"zone, or pick a higher-temperature type.")
     if dom == "mesh":
-        return ("No clear corridor — obstacles block the direct path. Add a waypoint to "
+        return ("No clear corridor - obstacles block the direct path. Add a waypoint to "
                 "steer the route around them, or raise the grid resolution.")
     if dom == "extra":
-        return ("No clear corridor — another routed wire blocks the direct path. Re-route "
+        return ("No clear corridor - another routed wire blocks the direct path. Re-route "
                 "it, lock a different order, or add a waypoint.")
     if dom == "clearance":
-        return ("No clear corridor — the safety clearance seals the direct path. Lower the "
+        return ("No clear corridor - the safety clearance seals the direct path. Lower the "
                 "clearance or add a waypoint.")
-    return ("No clear corridor between the two ends — every path is sealed by obstacles or "
+    return ("No clear corridor between the two ends - every path is sealed by obstacles or "
             "clearance. Lower the clearance, add a waypoint, or raise resolution.")
 
 
@@ -317,14 +317,14 @@ class ExpandedLatticeBuilder:
         step_len_x = xp.asarray(step_len) if gpu_build else step_len
 
         # No-corner-cutting: a diagonal step (a -> a+offset) may only be taken if the
-        # cells it squeezes BETWEEN are also free — otherwise the straight segment
+        # cells it squeezes BETWEEN are also free - otherwise the straight segment
         # clips a solid edge/corner. The "between" cells are the proper non-empty
         # sub-vectors of the offset (zero out some of its non-zero components). A face
         # move (one non-zero component) has none, so it is never restricted.
         def _intermediate_offsets(off):
             axes = [i for i in range(3) if off[i] != 0]
             # RELAXED no-corner-cutting: only restrict 2D EDGE diagonals (two non-zero
-            # components) — require their two face cells free, which stops the obvious
+            # components) - require their two face cells free, which stops the obvious
             # cube-edge clips. Full 3D corner moves (three non-zero) are left UNrestricted
             # so the router still threads tight openings instead of over-detouring.
             if len(axes) != 2:

@@ -3,7 +3,7 @@ pick query. Used to drop a waypoint exactly on the wire the user double-clicks.
 
 GUI / viewport-API dependent, so EVERY Kit call is guarded: if the viewport API is absent
 or differs, the picker silently does nothing (a [piperouter] warning is logged once).
-Mirrors the defensive style of viewport_labels.py. UNVERIFIED in a live GUI — the exact
+Mirrors the defensive style of viewport_labels.py. UNVERIFIED in a live GUI - the exact
 pick-query / gesture-payload API can vary across Kit builds; logging is verbose on purpose
 so a failure points at the offending step.
 """

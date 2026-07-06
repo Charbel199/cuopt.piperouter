@@ -65,7 +65,7 @@ def _solve_normal(A, B):
     """Least-squares solve of A x = B (B has 3 columns) via the normal equations.
     Returns (N,3) ndarray.
 
-    CPU (scipy) by default — and on purpose. The smoothing system is tiny (a few hundred
+    CPU (scipy) by default - and on purpose. The smoothing system is tiny (a few hundred
     points), so scipy solves it in microseconds. The GPU (cupy / cuSOLVER) path is OFF by
     default because running cupy in the SAME long-lived server process as cuGraph
     intermittently crashed the worker (a CUDA-context / RMM-allocator interaction), with

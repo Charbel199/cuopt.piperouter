@@ -107,7 +107,7 @@ class PipeRouterExtension(omni.ext.IExt):
 
         Tries the Kit command API first (most reliable), then falls back to
         manually positioning the perspective camera based on the scene bounding box.
-        Fully guarded — a failure here is non-critical.
+        Fully guarded - a failure here is non-critical.
         """
         try:
             import numpy as np
@@ -135,7 +135,7 @@ class PipeRouterExtension(omni.ext.IExt):
                 omni.usd.get_context().get_selection().set_selected_prim_paths(
                     ["/World"], True)
                 # Try several command names used in different Kit versions. Check the
-                # command is REGISTERED first — calling execute() on an unknown command
+                # command is REGISTERED first - calling execute() on an unknown command
                 # makes the command subsystem log a noisy [Error] even when we catch it.
                 for cmd in ("FrameViewportSelection",
                             "FocusViewport",
@@ -276,7 +276,7 @@ class PipeRouterExtension(omni.ext.IExt):
             # avoids re-voxelizing); fall back to a fresh voxelize if not routed yet
             grids = getattr(s, "last_grids", None)
             if grids is not None:
-                # occ is the RAW mesh now (clearance no longer baked) — re-dilate below
+                # occ is the RAW mesh now (clearance no longer baked) - re-dilate below
                 gbmin, cell, res, occ, _sd, thermal, em = grids
                 clr = float(getattr(s, "last_clearance_m", 0.0))
             else:
@@ -311,8 +311,8 @@ class PipeRouterExtension(omni.ext.IExt):
 
             ijk = np.argwhere(mask)
             if len(ijk) == 0:
-                hint = {"thermal": " — tag a prim with a °C value",
-                        "em": " — tag a prim with an EM strength"}.get(mode, "")
+                hint = {"thermal": " - tag a prim with a °C value",
+                        "em": " - tag a prim with an EM strength"}.get(mode, "")
                 carb.log_warn(f"[piperouter] overlay '{mode}': nothing to show{hint}")
                 return f"overlay '{mode}': nothing to show{hint}"
 
@@ -468,7 +468,7 @@ class PipeRouterExtension(omni.ext.IExt):
                 if not leaves:
                     return "[piperouter] octree: no free space in the grid"
                 # leaf wireframe boxes, coloured by size: small (fine, near surfaces) = warm,
-                # big (open air) = cool — so the adaptive resolution is obvious at a glance.
+                # big (open air) = cool - so the adaptive resolution is obvious at a glance.
                 sizes = [max(l[1] - l[0], l[3] - l[2], l[5] - l[4]) for l in leaves]
                 smax = max(sizes)
                 boxes, cols = [], []
@@ -510,7 +510,7 @@ class PipeRouterExtension(omni.ext.IExt):
     def slice_views(self, routes, target_px=1024):
         """Render the XY/XZ/YZ projection images from the EXACT routing grid (last
         voxelize), so the obstacles + clearance halo shown are precisely what the
-        router removed — the route can never appear to cross them. (Obstacles are at
+        router removed - the route can never appear to cross them. (Obstacles are at
         the routing resolution; raise it for finer views + finer routing together.)
         `routes` = [{"points": [[x,y,z],...], "color": (r,g,b)}]."""
         try:
@@ -521,7 +521,7 @@ class PipeRouterExtension(omni.ext.IExt):
                 return None, "route first (no voxel grids yet)"
             gbmin, cell, res, occ, _sd, thermal, em = grids
             # occ already includes the clearance keep-out (baked in compute_grids),
-            # so there's no separate halo to draw — show the prohibited voxels as-is
+            # so there's no separate halo to draw - show the prohibited voxels as-is
             imgs = slices.render_views(gbmin, cell, res, occ, thermal, routes,
                                        target_px=target_px)
             return imgs, None

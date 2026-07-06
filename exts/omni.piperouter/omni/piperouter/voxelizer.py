@@ -10,8 +10,8 @@ from __future__ import annotations
 import numpy as np
 from pxr import Usd, UsdGeom
 
-# Warp is imported lazily (see _ensure_warp) so this module — and therefore the
-# whole extension — loads even in a Kit app that hasn't enabled omni.warp. Warp is
+# Warp is imported lazily (see _ensure_warp) so this module - and therefore the
+# whole extension - loads even in a Kit app that hasn't enabled omni.warp. Warp is
 # only required when voxelize() actually runs, and then we raise a clear error.
 _wp = None
 _kernel = None
@@ -151,7 +151,7 @@ def voxelize(points, indices, bounds_min, cell_size, res_xyz,
         # are watertight even when no cell centre lands inside them. A continuous wall's
         # nearest cell-centre is at most 0.5*cell away (axis-aligned worst case; tilted
         # planes are closer), so 0.6*cell guarantees every column crossing the wall has
-        # an occupied cell — no straight-line tunnelling — while adding only a thin shell
+        # an occupied cell - no straight-line tunnelling - while adding only a thin shell
         # (not the ~1-cell dilation a full half-diagonal band would impose on every solid).
         surface_band = 0.6 * float(cell_size)
     if max_dist is None:

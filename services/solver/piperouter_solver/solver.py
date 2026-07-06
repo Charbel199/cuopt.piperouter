@@ -28,7 +28,7 @@ def _in_bounds(blocked, c):
 
 def _nearest_free_cell(blocked, cell):
     """Nearest free cell to `cell` by breadth-first (6-connected) expansion through the
-    blocked grid — used to relocate a START/END that's buried inside an obstacle to the
+    blocked grid - used to relocate a START/END that's buried inside an obstacle to the
     closest open space. Returns the cell (the input cell if already free) or None if the
     whole grid is blocked. Clamps an out-of-bounds input into the grid first."""
     nx, ny, nz = blocked.shape
@@ -69,7 +69,7 @@ class Solver:
         cell_seq = [frame.world_to_grid(p) for p in waypts]
 
         # Safety clearance, split into HARD vs a relaxable SHELL:
-        #   hard  = mesh dilated by the wire radius — the tube physically can't intersect
+        #   hard  = mesh dilated by the wire radius - the tube physically can't intersect
         #           it. This is the ONLY thing that buries an endpoint (triggers relocation)
         #           and the only thing the route can never enter.
         #   shell = the extra safety-clearance band (radius .. radius+clearance). The route's
@@ -84,13 +84,13 @@ class Solver:
         hard = stack.dilate_occupancy(radius).astype(bool)
         # Prior routed wires (route_all marks them dilated by THEIR radius; refine
         # rasterizes locked tubes likewise), grown here by THIS wire's radius too, so the
-        # two tube BODIES stay r_prior + r_this apart — not just their centerlines.
+        # two tube BODIES stay r_prior + r_this apart - not just their centerlines.
         prior = None
         if extra_obstacles is not None:
             prior = np.asarray(extra_obstacles, dtype=bool)
             if rad_cells > 0 and prior.any():
                 prior = ndimage.binary_dilation(prior, structure=_ST6, iterations=rad_cells)
-        # relocation target avoids mesh+radius, melt and prior tubes — but NOT the clearance
+        # relocation target avoids mesh+radius, melt and prior tubes - but NOT the clearance
         # band (an endpoint is allowed to sit within clearance of a surface).
         reloc_blocked = planners.blocked_mask(stack, req.wire, 0.0, prior)
         notes: list[str] = []
@@ -107,7 +107,7 @@ class Solver:
             w = np.asarray(frame.grid_to_world(free), dtype=np.float64)
             dist_mm = float(np.linalg.norm(w - marker_world)) * 1000.0
             return (free, w,
-                    f"{label} is buried in an obstacle — routed to the nearest open point "
+                    f"{label} is buried in an obstacle - routed to the nearest open point "
                     f"({dist_mm:.0f} mm away)")
 
         cell_seq[0], start_world, n0 = _rescue(cell_seq[0], start_world, "Start")
@@ -120,7 +120,7 @@ class Solver:
         # (clearance_values by class), untagged geometry keeps the request default. The
         # shell is WAIVED in a ball around every terminal the route must touch: start,
         # END, and each WAYPOINT (a user-pinned point near a surface is just as
-        # legitimate a terminal as a connector — without this, a point inside the
+        # legitimate a terminal as a connector - without this, a point inside the
         # clearance band made the whole wire no_path).
         cvals = list(getattr(stack, "clearance_values", ()) or ())
         has_cls = getattr(stack, "clearance_class", None) is not None and cvals
@@ -169,7 +169,7 @@ class Solver:
             blocked = reloc_blocked
 
         # HEADING STUB: a pinned heading means the cable must LEAVE/ARRIVE along that
-        # direction for a real distance, not one voxel — otherwise a cheap 90-degree turn
+        # direction for a real distance, not one voxel - otherwise a cheap 90-degree turn
         # right after the first cell defeats the point of the arrow. March up to a
         # min-bend-radius worth of FREE cells along the heading, force them as the path's
         # straight prefix (start) / suffix (end), and route from the stub's far end (still
@@ -224,14 +224,14 @@ class Solver:
             )
             if leg is None and li > 0 and sh is not None:
                 # the continuity heading over-constrained this leg (e.g. a hairpin
-                # waypoint that demands a >45 turn) — retry without it rather than fail.
+                # waypoint that demands a >45 turn) - retry without it rather than fail.
                 leg = self._solve_leg(
                     planner, stack, req.wire, req.weights, req.connectivity, a, b,
                     planner_extra, clearance_m=0.0, start_heading=None,
                     goal_heading=gh,
                 )
             if leg is None and li == 0 and start_stub:
-                # the departure runway dead-ends (stub far end boxed in) — drop the
+                # the departure runway dead-ends (stub far end boxed in) - drop the
                 # stub and route from the original start; the heading still gates the
                 # first step, so this degrades to the pre-stub behaviour, not a failure.
                 start_stub = []
@@ -278,7 +278,7 @@ class Solver:
             all_cells.extend(list(reversed(end_stub[:-1])) + [orig_goal])
 
         # Build the world polyline. Anchor it to the ACTUAL endpoint markers (the start
-        # cell isn't in all_cells — the source links to a NEIGHBOUR of it — and markers
+        # cell isn't in all_cells - the source links to a NEIGHBOUR of it - and markers
         # sit at sub-cell positions, so otherwise the tube looks detached). Replace each
         # waypoint's cell centre with the EXACT waypoint marker, and mark start /
         # waypoints / end as hard points the smoother must pass through (waypoints are a
@@ -307,7 +307,7 @@ class Solver:
                 cell_world[idx] = end_world - he * cell * (last - idx)
             stub_fixed.add(suffix_begin - 1)   # the leg's final cell = the stub's far end
 
-        # Anchor to the markers — or, when an endpoint was buried, to the open point we
+        # Anchor to the markers - or, when an endpoint was buried, to the open point we
         # relocated it to (start_world / end_world), so the tube ends in free space.
         pts = [start_world]
         flags = [True]

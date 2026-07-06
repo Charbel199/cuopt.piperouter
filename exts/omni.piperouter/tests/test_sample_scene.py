@@ -133,7 +133,7 @@ def test_complex_scene_routes_through_solver(solver_server):
     routed = sum(1 for r in results if r["status"] == "routed")
     failed = [r for r in results if r["status"] != "routed"]
     # MOST wires route. With the strict no-corner-cutting rule a busy bay leaves a few
-    # genuinely tight diagonal corridors unroutable at this resolution — that's correct,
+    # genuinely tight diagonal corridors unroutable at this resolution - that's correct,
     # and each such failure must carry an explanatory reason.
     assert routed >= len(descriptors) - 4
     assert all(r.get("reason") for r in failed)

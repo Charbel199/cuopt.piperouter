@@ -1,7 +1,7 @@
 """Voxel-grid framing + .npz writer.
 
 Writes exactly the keys `piperouter_solver.grids.GridStack.load` expects, so the
-extension never needs to import the solver package — the file on the shared dir is
+extension never needs to import the solver package - the file on the shared dir is
 the contract.
 """
 from __future__ import annotations

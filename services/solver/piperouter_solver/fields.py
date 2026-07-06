@@ -37,7 +37,7 @@ def soft_cost_field(stack, wire, weights: dict) -> np.ndarray:
 
     The lattice builder turns this into edge weight `step_len * (1 + S(dst)) + turn`,
     so a higher S(cell) makes the router prefer to route AROUND that cell (it never
-    forbids it — that's what the hard masks are for).
+    forbids it - that's what the hard masks are for).
 
     Each field is normalized to [0,1] so the slider weights (0..10 in the UI) are the
     only thing that sets relative importance, regardless of the field's raw units:
@@ -47,7 +47,7 @@ def soft_cost_field(stack, wire, weights: dict) -> np.ndarray:
         be clipped down instead of floating). Weight = `weights["surface"]`.
       * thermal      : temperature (°C). Hotter cells cost more. Weight =
         `weights["thermal"]`. (Cells OVER the wire's rating are removed entirely by
-        melt_mask — see below.)
+        melt_mask - see below.)
       * em           : EM field strength. Costlier near emitters, but ALSO multiplied by
         this wire type's `em_sensitivity` so an EM-immune pipe (sensitivity 0) ignores
         EM no matter the slider. Weight = `weights["em"]`.
@@ -98,7 +98,7 @@ def turn_penalty(
 
     This is the "bend" constraint. It's path-dependent (the cost of a turn depends on
     how you arrived), which is exactly why the lattice node carries the heading. We
-    return a cost, never infinity, so a route is always findable — a too-tight turn is
+    return a cost, never infinity, so a route is always findable - a too-tight turn is
     expensive, not forbidden (that was the design choice: soft bend).
 
     Model: turning through `angle` radians over roughly one cell of travel implies a

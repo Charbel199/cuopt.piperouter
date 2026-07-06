@@ -46,7 +46,7 @@ def build_sample_scene(stage):
         _clear(stage, p)
 
     UsdGeom.Xform.Define(stage, "/World")
-    # Centimetres — Omniverse's native unit — so imported cm assets line up 1:1.
+    # Centimetres - Omniverse's native unit - so imported cm assets line up 1:1.
     # Geometry is authored at SCALE metres * 100 units/m; the routing pipeline reads
     # this metersPerUnit and converts back to metres for the solver.
     UsdGeom.SetStageMetersPerUnit(stage, METERS_PER_UNIT)
@@ -62,7 +62,7 @@ def build_sample_scene(stage):
     # hot engine block
     eb = box(stage, SAMPLE_ROOT + "/engine_block", _s((0.55, 0.50, 0.25)), _s((0.50, 0.50, 0.50)), (0.60, 0.30, 0.20))
     scene_ops.write_tags(eb.GetPrim(), temp_c=120.0)
-    # components — one is an EM source
+    # components - one is an EM source
     ca = box(stage, SAMPLE_ROOT + "/comp_a", _s((1.50, 0.80, 0.20)), _s((0.30, 0.25, 0.40)), (0.25, 0.40, 0.60))
     scene_ops.write_tags(ca.GetPrim(), em=0.8)
     box(stage, SAMPLE_ROOT + "/comp_b", _s((1.60, 0.25, 0.20)), _s((0.30, 0.30, 0.40)), (0.30, 0.50, 0.40))
@@ -87,10 +87,10 @@ def build_sample_scene(stage):
 # COMPLEX_SCALE = 1.5 -> a ~5 m vehicle-front footprint (realistic; was 6.0 = ~20 m). This
 # is about the smallest that still lets the stiff pipes route through the tight corridors:
 # shrinking further makes the fixed physical bend radii too large for the gaps and several
-# pipes can no longer route (verified — at 1.2 only 9/14 route).
+# pipes can no longer route (verified - at 1.2 only 9/14 route).
 COMPLEX_SCALE = 1.5
 
-# (name, center, size, color, temp_c, em) — base units (×COMPLEX_SCALE on build).
+# (name, center, size, color, temp_c, em) - base units (×COMPLEX_SCALE on build).
 COMPLEX_BOXES = [
     ("ground",         (1.50, 1.00, -0.05), (3.40, 2.40, 0.05), (0.30, 0.30, 0.32), None, None),
     ("engine_block",   (0.60, 1.00, 0.30),  (0.60, 0.70, 0.60), (0.55, 0.30, 0.20), 120.0, None),
@@ -109,7 +109,7 @@ COMPLEX_BOXES = [
     ("chassis_rail_r", (1.50, 1.75, 0.10),  (3.00, 0.12, 0.12), (0.40, 0.40, 0.42), None, None),
 ]
 
-# (name, wire-type id, start, end) — base units.
+# (name, wire-type id, start, end) - base units.
 COMPLEX_WIRES = [
     ("batt_pwr_0",     "pwr_4awg",        (0.30, 1.60, 0.45), (1.95, 1.58, 0.45)),
     ("starter_pwr_1",  "pwr_4awg",        (0.40, 1.25, 0.65), (1.00, 1.05, 0.65)),
@@ -137,7 +137,7 @@ def build_complex_scene(stage):
         _clear(stage, p)
 
     UsdGeom.Xform.Define(stage, "/World")
-    # Centimetres (see build_sample_scene) — native Omniverse unit.
+    # Centimetres (see build_sample_scene) - native Omniverse unit.
     UsdGeom.SetStageMetersPerUnit(stage, METERS_PER_UNIT)
     UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.y)
     UsdGeom.Scope.Define(stage, SAMPLE_ROOT)
