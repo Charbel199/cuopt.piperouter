@@ -17,6 +17,7 @@ import numpy as np
 
 from . import fields
 from .backend import shortest_path
+from .grids import _xp
 from .lattice import ExpandedLatticeBuilder
 
 _log = logging.getLogger("piperouter")
@@ -338,69 +339,177 @@ def _raster_cells(a, b):
     return out
 
 
+class _CSRAdj:
+    """Read-only leaf adjacency in CSR storage (node id -> array of neighbour ids).
+    Only supports the `.get(lid, default)` access pattern the planners use; built
+    entirely with array ops so construction has NO per-edge/per-node Python loop."""
+    __slots__ = ("indptr", "indices")
+
+    def __init__(self, indptr, indices):
+        self.indptr = indptr
+        self.indices = indices
+
+    def get(self, lid, default=()):
+        lid = int(lid)
+        if lid < 0 or lid + 1 >= self.indptr.size:
+            return default
+        i0, i1 = int(self.indptr[lid]), int(self.indptr[lid + 1])
+        return self.indices[i0:i1] if i1 > i0 else default
+
+
 def leaf_adjacency(leaf_of, n_leaves):
     """Face-adjacency of octree free leaves, VECTORIZED. Compares each axis's
     neighbouring slabs (`leaf_of[:-1] vs leaf_of[1:]`) to find boundary cells whose two
-    sides belong to different free leaves, dedups the (lo,hi) pairs, and builds the
-    adjacency from the UNIQUE edges. O(grid) in numpy + O(edges) in Python - replaces the
-    old O(free-voxels) Python loop that made octree_lattice blow up at high resolution."""
-    adj = {}
+    sides belong to different free leaves, dedups the (lo,hi) pairs, and groups the
+    UNIQUE edges into CSR - array ops end to end (cupy when PIPEROUTER_GPU_BUILD=1),
+    no Python loop over edges or nodes."""
+    xp = _xp()
+    lof = xp.asarray(leaf_of)
     pa, pb = [], []
-    for x, y in ((leaf_of[:-1, :, :], leaf_of[1:, :, :]),
-                 (leaf_of[:, :-1, :], leaf_of[:, 1:, :]),
-                 (leaf_of[:, :, :-1], leaf_of[:, :, 1:])):
+    for x, y in ((lof[:-1, :, :], lof[1:, :, :]),
+                 (lof[:, :-1, :], lof[:, 1:, :]),
+                 (lof[:, :, :-1], lof[:, :, 1:])):
         m = (x >= 0) & (y >= 0) & (x != y)
-        if m.any():
-            pa.append(x[m].ravel())
-            pb.append(y[m].ravel())
-    if not pa:
-        return adj
-    a = np.concatenate(pa).astype(np.int64)
-    b = np.concatenate(pb).astype(np.int64)
-    lo = np.minimum(a, b)
-    hi = np.maximum(a, b)
-    keys = np.unique(lo * np.int64(n_leaves) + hi)     # unique undirected leaf-pairs
-    for k in keys:
-        u, v = int(k // n_leaves), int(k % n_leaves)
-        adj.setdefault(u, set()).add(v)
-        adj.setdefault(v, set()).add(u)
-    return adj
+        pa.append(x[m].ravel())
+        pb.append(y[m].ravel())
+    a = xp.concatenate(pa).astype(xp.int64)
+    if a.size == 0:
+        return _CSRAdj(np.zeros(max(n_leaves, 0) + 1, dtype=np.int64),
+                       np.empty(0, dtype=np.int64))
+    b = xp.concatenate(pb).astype(xp.int64)
+    lo = xp.minimum(a, b)
+    hi = xp.maximum(a, b)
+    keys = xp.unique(lo * np.int64(n_leaves) + hi)     # unique undirected leaf-pairs
+    u = keys // n_leaves
+    v = keys % n_leaves
+    src = xp.concatenate([u, v])
+    dst = xp.concatenate([v, u])
+    order = xp.argsort(src)
+    dst = dst[order]
+    counts = xp.bincount(src, minlength=n_leaves)
+    indptr = xp.zeros(n_leaves + 1, dtype=xp.int64)
+    indptr[1:] = xp.cumsum(counts)
+    if xp is not np:
+        dst = xp.asnumpy(dst)
+        indptr = xp.asnumpy(indptr)
+    return _CSRAdj(indptr, dst)
 
 
 def octree_leaves(blocked):
     """Subdivide `blocked` into octree free leaves. Returns (ranges, leaf_of): ranges =
     list of (i0,i1,j0,j1,k0,k1) free-leaf boxes; leaf_of[i,j,k] = leaf id or -1. Geometry
-    only - independent of soft costs / prior routes, so it can be cached per scene."""
+    only - independent of soft costs / prior routes, so it can be cached per scene.
+
+    Level-vectorized: every subdivision level classifies ALL its boxes at once. A padded
+    3D integral image (summed-area table) turns each box's any()/all() test into an
+    8-corner gather, so classification is fancy indexing instead of per-box sub-array
+    scans, and children are emitted with array ops. Same partition as the naive
+    recursion (see test_perf_kernels), but ~50x faster on big grids because Python cost
+    is per LEVEL (~log n), not per box (millions)."""
     blocked = np.asarray(blocked, dtype=bool)
     nx, ny, nz = blocked.shape
-    leaf_of = np.full(blocked.shape, -1, dtype=np.int64)
-    ranges = []
-    nodes = [(0, nx, 0, ny, 0, nz)]
-    while nodes:
-        i0, i1, j0, j1, k0, k1 = nodes.pop()
-        sub = blocked[i0:i1, j0:j1, k0:k1]
-        if not sub.any():
-            lid = len(ranges)
-            leaf_of[i0:i1, j0:j1, k0:k1] = lid
-            ranges.append((i0, i1, j0, j1, k0, k1))
-            continue
-        if sub.all():
-            continue
+    leaf_of = np.full(blocked.shape, -1, dtype=np.int32)
+    xp = _xp()
+    # Padded integral image: P[i,j,k] = count of blocked cells in blocked[:i,:j,:k].
+    # int32 is safe (max count = total cells < 2^31 for any grid we can hold in RAM).
+    P = xp.zeros((nx + 1, ny + 1, nz + 1), dtype=np.int32)
+    P[1:, 1:, 1:] = xp.asarray(blocked)
+    # In-place cumsum along each axis (the zero padding at index 0 is preserved).
+    xp.cumsum(P, axis=0, out=P)
+    xp.cumsum(P, axis=1, out=P)
+    xp.cumsum(P, axis=2, out=P)
+
+    # Boxes at the current level, as column arrays (n, 6): i0,i1,j0,j1,k0,k1.
+    # The whole classify/subdivide loop runs on xp (GPU when enabled); only the free
+    # boxes of each level come back to host, for leaf painting and the ranges array.
+    level_free = []
+    n_leaves = 0
+    boxes = xp.asarray(np.array([[0, nx, 0, ny, 0, nz]], dtype=np.int32))
+    while boxes.size:
+        i0, i1, j0, j1, k0, k1 = (boxes[:, c] for c in range(6))
+        cnt = (P[i1, j1, k1] - P[i0, j1, k1] - P[i1, j0, k1] - P[i1, j1, k0]
+               + P[i0, j0, k1] + P[i0, j1, k0] + P[i1, j0, k0] - P[i0, j0, k0])
+        vol = (i1 - i0).astype(xp.int64) * (j1 - j0) * (k1 - k0)
+        free = cnt == 0
+        mixed = (cnt > 0) & (cnt < vol)          # fully-blocked boxes are dropped
+
+        if bool(free.any()):
+            fb = boxes[free]
+            fb = xp.asnumpy(fb) if xp is not np else fb
+            base = n_leaves
+            n_leaves += len(fb)
+            level_free.append(fb)
+            single = (fb[:, 1] - fb[:, 0] == 1) & (fb[:, 3] - fb[:, 2] == 1) \
+                     & (fb[:, 5] - fb[:, 4] == 1)
+            # Most leaves on big grids are single cells - paint those in one gather.
+            sb = fb[single]
+            leaf_of[sb[:, 0], sb[:, 2], sb[:, 4]] = base + np.flatnonzero(single)
+            for off, box in zip(np.flatnonzero(~single), fb[~single]):
+                a0, a1, b0, b1, c0, c1 = box
+                leaf_of[a0:a1, b0:b1, c0:c1] = base + off
+
+        if not bool(mixed.any()):
+            break
+        mb = boxes[mixed]
+        i0, i1, j0, j1, k0, k1 = (mb[:, c] for c in range(6))
         mi, mj, mk = (i0 + i1) // 2, (j0 + j1) // 2, (k0 + k1) // 2
-        xs = [(i0, i1)] if i1 - i0 <= 1 else [(i0, mi), (mi, i1)]
-        ys = [(j0, j1)] if j1 - j0 <= 1 else [(j0, mj), (mj, j1)]
-        zs = [(k0, k1)] if k1 - k0 <= 1 else [(k0, mk), (mk, k1)]
-        for xa, xb in xs:
-            for ya, yb in ys:
-                for za, zb in zs:
-                    nodes.append((xa, xb, ya, yb, za, zb))
+        sx, sy, sz = i1 - i0 > 1, j1 - j0 > 1, k1 - k0 > 1
+        children = []
+        for bx in (0, 1):
+            ca0 = i0 if bx == 0 else mi
+            ca1 = xp.where(sx, mi, i1) if bx == 0 else i1
+            for by in (0, 1):
+                cb0 = j0 if by == 0 else mj
+                cb1 = xp.where(sy, mj, j1) if by == 0 else j1
+                for bz in (0, 1):
+                    cc0 = k0 if bz == 0 else mk
+                    cc1 = xp.where(sz, mk, k1) if bz == 0 else k1
+                    # The "upper half" along a size-1 axis doesn't exist.
+                    valid = xp.ones(len(mb), dtype=bool)
+                    if bx:
+                        valid = valid & sx
+                    if by:
+                        valid = valid & sy
+                    if bz:
+                        valid = valid & sz
+                    if bool(valid.any()):
+                        children.append(xp.stack(
+                            [xp.broadcast_to(ca0, valid.shape)[valid],
+                             xp.broadcast_to(ca1, valid.shape)[valid],
+                             xp.broadcast_to(cb0, valid.shape)[valid],
+                             xp.broadcast_to(cb1, valid.shape)[valid],
+                             xp.broadcast_to(cc0, valid.shape)[valid],
+                             xp.broadcast_to(cc1, valid.shape)[valid]], axis=1))
+        boxes = xp.concatenate(children, axis=0) if children else \
+            xp.asarray(np.empty((0, 6), dtype=np.int32))
+    ranges = (np.concatenate(level_free, axis=0).astype(np.int32) if level_free
+              else np.empty((0, 6), dtype=np.int32))
     return ranges, leaf_of
 
 
-def octree_corridor(ranges, leaf_of, adj, start_cell, goal_cell, leaf_soft=None):
+def corridor_geometry(ranges, adj):
+    """Precompute what the corridor A* needs per SCENE octree (wire-independent, cached
+    alongside the octree): leaf centres and the geometric length of every CSR edge."""
+    r = np.asarray(ranges, dtype=np.float64).reshape(-1, 6)
+    centers = np.stack([(r[:, 0] + r[:, 1] - 1) * 0.5,
+                        (r[:, 2] + r[:, 3] - 1) * 0.5,
+                        (r[:, 4] + r[:, 5] - 1) * 0.5], axis=1)
+    d = centers[adj.indices] - centers[np.repeat(np.arange(len(centers)),
+                                                 np.diff(adj.indptr))]
+    elen = np.sqrt((d * d).sum(axis=1))
+    return centers, elen
+
+
+def octree_corridor(ranges, leaf_of, adj, start_cell, goal_cell, leaf_soft=None,
+                    geo=None):
     """Coarse A* (plain distance) through free-leaf centres start->goal, rasterized to a
     dense cell list. Returns the corridor cells or None. Used as a cheap HEURISTIC corridor
-    for octree_lattice; the fine lattice does the real cost/collision routing in the band."""
+    for octree_lattice; the fine lattice does the real cost/collision routing in the band.
+
+    Same search as always, but all geometry is precomputed arrays (`geo`, cached per
+    scene octree): per-edge weights and per-leaf heuristic are one vectorized pass each,
+    so the A* loop itself touches only floats - no per-neighbour numpy allocation. This
+    was the last Python hot spot of high-resolution solves (~1 s/wire at res 1000)."""
     nx, ny, nz = leaf_of.shape
 
     def clamp(c):
@@ -411,40 +520,41 @@ def octree_corridor(ranges, leaf_of, adj, start_cell, goal_cell, leaf_soft=None)
     sa, sb = int(leaf_of[a]), int(leaf_of[b])
     if sa < 0 or sb < 0:
         return None
+    if geo is None:
+        geo = corridor_geometry(ranges, adj)
+    centers, elen = geo
+    indptr, indices = adj.indptr, adj.indices
+    # Per-edge cost, biased by the destination leaf's soft cost so the corridor heads
+    # toward cheap cells (e.g. hugs surfaces, avoids heat/EM) instead of always taking
+    # the open-air geometric shortest - which is what defeated surface-hug.
+    w = elen * (1.0 + leaf_soft[indices]) if leaf_soft is not None else elen
+    diff = centers - centers[sb]
+    hval = np.sqrt((diff * diff).sum(axis=1))
 
-    def ctr(lid):
-        r = ranges[lid]
-        return np.array([0.5 * (r[0] + r[1] - 1), 0.5 * (r[2] + r[3] - 1),
-                         0.5 * (r[4] + r[5] - 1)])
-
-    goal_c = ctr(sb)
     g = {sa: 0.0}
     came = {}
-    pq = [(float(np.linalg.norm(ctr(sa) - goal_c)), sa)]
+    pq = [(float(hval[sa]), sa)]
     found = False
     while pq:
         _f, lid = heapq.heappop(pq)
         if lid == sb:
             found = True
             break
-        for nb in adj.get(lid, ()):
-            # distance, biased by the destination leaf's soft cost so the corridor heads
-            # toward cheap cells (e.g. hugs surfaces, avoids heat/EM) instead of always
-            # taking the open-air geometric shortest - which is what defeated surface-hug.
-            step = float(np.linalg.norm(ctr(nb) - ctr(lid)))
-            soft_nb = float(leaf_soft[nb]) if leaf_soft is not None else 0.0
-            ng = g[lid] + step * (1.0 + soft_nb)
+        gc = g[lid]
+        for e in range(int(indptr[lid]), int(indptr[lid + 1])):
+            nb = int(indices[e])
+            ng = gc + float(w[e])
             if ng < g.get(nb, 1e18):
                 g[nb] = ng
                 came[nb] = lid
-                heapq.heappush(pq, (ng + float(np.linalg.norm(ctr(nb) - goal_c)), nb))
+                heapq.heappush(pq, (ng + float(hval[nb]), nb))
     if not found:
         return None
     chain = [sb]
     while chain[-1] in came:
         chain.append(came[chain[-1]])
     chain.reverse()
-    waypts = [np.asarray(a, float)] + [ctr(l) for l in chain] + [np.asarray(b, float)]
+    waypts = [np.asarray(a, float)] + [centers[l] for l in chain] + [np.asarray(b, float)]
     cells = []
     for p, q in zip(waypts[:-1], waypts[1:]):
         for c in _raster_cells(p, q):
@@ -452,6 +562,65 @@ def octree_corridor(ranges, leaf_of, adj, start_cell, goal_cell, leaf_soft=None)
                     and (not cells or cells[-1] != c)):
                 cells.append(c)
     return cells or None
+
+
+def band_mask(shape, pts, r):
+    """Union of clipped (2r+1)-cube boxes centred on `pts` - exactly what the old
+    per-point slice loop painted, but as a scatter + separable box dilation in array
+    ops (cupy when PIPEROUTER_GPU_BUILD=1). Points may lie outside the grid (heading
+    rays walk off it) and clip cleanly - which also fixes the old slice loop's bug
+    where a point more than r+1 below the low edge made the slice stop negative and
+    wrap around, painting a spurious far-side stripe into the band."""
+    nx, ny, nz = shape
+    r = int(r)
+    p = np.asarray(pts, dtype=np.int64).reshape(-1, 3)
+    keep = ((p[:, 0] >= -r) & (p[:, 0] < nx + r)
+            & (p[:, 1] >= -r) & (p[:, 1] < ny + r)
+            & (p[:, 2] >= -r) & (p[:, 2] < nz + r))
+    p = p[keep] + r
+    if len(p) == 0:
+        return np.zeros(shape, dtype=bool)
+    xp = _xp()
+    grid = xp.zeros((nx + 2 * r, ny + 2 * r, nz + 2 * r), dtype=bool)
+    px = xp.asarray(p)
+    grid[px[:, 0], px[:, 1], px[:, 2]] = True
+    for axis in range(3):
+        out = grid.copy()
+        for shift in range(1, r + 1):
+            lo = [slice(None)] * 3
+            hi = [slice(None)] * 3
+            lo[axis] = slice(shift, None)
+            hi[axis] = slice(None, -shift)
+            out[tuple(lo)] |= grid[tuple(hi)]
+            out[tuple(hi)] |= grid[tuple(lo)]
+        grid = out
+    band = grid[r:r + nx, r:r + ny, r:r + nz]
+    return xp.asnumpy(band) if xp is not np else band
+
+
+def leaf_soft_means(stack, rad_cells, soft, ranges, leaf_of):
+    """Per-leaf mean of the soft-cost field. Cached on the stack per (octree radius,
+    soft-field object): the soft field is itself cached per weights on the stack, so
+    its id() is a stable key for the solve - wires sharing weights reuse the result.
+    The 78M-cell gather + bincount runs on xp (GPU when enabled); the denominator is
+    exact from box volumes (a leaf IS its box)."""
+    cache = stack.__dict__.setdefault("_leaf_soft_cache", {})
+    key = (int(rad_cells), id(soft))
+    hit = cache.get(key)
+    if hit is not None:
+        return hit
+    n = len(ranges)
+    xp = _xp()
+    flat = xp.asarray(leaf_of).ravel()
+    m = flat >= 0
+    sums = xp.bincount(flat[m], weights=xp.asarray(soft).ravel()[m], minlength=n)
+    if xp is not np:
+        sums = xp.asnumpy(sums)
+    r = np.asarray(ranges, dtype=np.float64).reshape(-1, 6)
+    vols = (r[:, 1] - r[:, 0]) * (r[:, 3] - r[:, 2]) * (r[:, 5] - r[:, 4])
+    out = sums / np.maximum(vols, 1.0)
+    cache[key] = out
+    return out
 
 
 class OctreeGlobal(_GridPlannerBase):
@@ -592,6 +761,14 @@ class MedialGlobal(_GridPlannerBase):
         return None
 
 
+# Full-lattice fallback budget: the exhaustive (cell x heading) graph has roughly
+# n_free * H^2 edges. Beyond ~1e9 the build is a guaranteed multi-minute stall on CPU
+# and an out-of-memory on cuGraph (measured: 1.35B edges at res 300 OOMs a 95GB GPU),
+# so past this the fallback is skipped and the wire honestly reports no_path instead
+# of taking the whole solve down with it.
+_FULL_FALLBACK_EDGE_BUDGET = 1.0e9
+
+
 class OctreeLatticeGlobal(_GridPlannerBase):
     """Hierarchical octree + heading lattice. The octree finds a cheap coarse corridor;
     then the FULL bend-aware lattice runs only in a band of fine cells around that corridor
@@ -614,38 +791,36 @@ class OctreeLatticeGlobal(_GridPlannerBase):
         rad_cells = int(round((wire.radius_m + clearance_m) / cell)) if cell > 0 else 0
         cache = stack.__dict__.setdefault("_octree_cache", {})
         if rad_cells not in cache:
-            geo = stack.dilate_occupancy(wire.radius_m + clearance_m).astype(bool)
-            ranges, leaf_of = octree_leaves(geo)
-            cache[rad_cells] = (ranges, leaf_of, leaf_adjacency(leaf_of, len(ranges)))
+            blocked = stack.dilate_occupancy(wire.radius_m + clearance_m).astype(bool)
+            ranges, leaf_of = octree_leaves(blocked)
+            adj = leaf_adjacency(leaf_of, len(ranges))
+            cache[rad_cells] = (ranges, leaf_of, adj, corridor_geometry(ranges, adj))
         return cache[rad_cells]
 
     def plan(self, stack, wire, weights, connectivity, start_cell, goal_cell,
              extra_obstacles, clearance_m, start_heading, goal_heading):
-        ranges, leaf_of, adj = self._scene_octree(stack, wire, clearance_m)
+        ranges, leaf_of, adj, geo = self._scene_octree(stack, wire, clearance_m)
         # per-leaf mean soft cost (surface-hug / thermal / EM) so the coarse corridor is
-        # pulled toward the cells the route actually wants - vectorized, leaves are cached.
+        # pulled toward the cells the route actually wants - cached across wires that
+        # share weights, computed on xp (GPU when enabled).
         soft = fields.soft_cost_field(stack, wire, weights)
-        flat = leaf_of.ravel()
-        m = flat >= 0
-        n = len(ranges)
-        sums = np.bincount(flat[m], weights=soft.ravel()[m], minlength=n)
-        cnts = np.bincount(flat[m], minlength=n)
-        leaf_soft = sums / np.maximum(cnts, 1)
+        cell = float(stack.frame.cell_size)
+        rad_cells = int(round((wire.radius_m + clearance_m) / cell)) if cell > 0 else 0
+        leaf_soft = leaf_soft_means(stack, rad_cells, soft, ranges, leaf_of)
         corridor = octree_corridor(ranges, leaf_of, adj,
                                    tuple(int(v) for v in start_cell),
-                                   tuple(int(v) for v in goal_cell), leaf_soft=leaf_soft)
+                                   tuple(int(v) for v in goal_cell),
+                                   leaf_soft=leaf_soft, geo=geo)
         if corridor:
             nx, ny, nz = stack.occupancy.shape
-            band = np.zeros((nx, ny, nz), dtype=bool)
-            r = self.band
-            pts = list(corridor) + [tuple(int(v) for v in start_cell),
-                                    tuple(int(v) for v in goal_cell)]
+            base_pts = list(corridor) + [tuple(int(v) for v in start_cell),
+                                         tuple(int(v) for v in goal_cell)]
 
             # The corridor is computed heading-blind; a pinned departure/arrival heading
             # may point OUT of its band, forcing an immediate kink back (or a fallback).
             # Cover the heading's runway too: a ray of cells leaving the start along
             # start_heading, and approaching the goal along goal_heading.
-            def _heading_ray(cell_ijk, heading, sign):
+            def _heading_ray(pts, cell_ijk, heading, sign, r):
                 if heading is None:
                     return
                 h = np.asarray(heading, dtype=np.float64)
@@ -658,24 +833,40 @@ class OctreeLatticeGlobal(_GridPlannerBase):
                     p = c + sign * h * t
                     pts.append(tuple(int(round(v)) for v in p))
 
-            _heading_ray(start_cell, start_heading, +1)   # runway leaving the start
-            _heading_ray(goal_cell, goal_heading, -1)     # approach into the goal
-            for ci, cj, ck in pts:                       # dilate the corridor into a band
-                band[max(0, ci - r):min(nx, ci + r + 1),
-                     max(0, cj - r):min(ny, cj + r + 1),
-                     max(0, ck - r):min(nz, ck + r + 1)] = True
-            # lattice restricted to the band: cells OUTSIDE the band become obstacles, AND
-            # prior routes (extra_obstacles) stay obstacles - so the final route is
-            # collision-correct against the other wires even though the cached octree wasn't.
-            outside = ~band
-            if extra_obstacles is not None:
-                outside = outside | np.asarray(extra_obstacles, dtype=bool)
-            cells = self._lat.plan(stack, wire, weights, connectivity, start_cell,
-                                   goal_cell, outside, clearance_m,
-                                   start_heading, goal_heading)
-            if cells is not None:
-                return cells
-        # no corridor / band too tight -> full lattice (with prior routes); never worse
+            # The corridor octree is geometry-only, so under congestion (many prior
+            # routes near the same connectors) the default band can be saturated by
+            # already-routed wires. ESCALATE the band width before ever considering
+            # the full lattice - a 3x band costs band-graph money, the full lattice
+            # costs whole-grid money (infeasible at high resolution).
+            for r in (self.band, 3 * self.band):
+                pts = list(base_pts)
+                _heading_ray(pts, start_cell, start_heading, +1, r)
+                _heading_ray(pts, goal_cell, goal_heading, -1, r)
+                band = band_mask((nx, ny, nz), pts, r)   # corridor dilated into a band
+                # lattice restricted to the band: cells OUTSIDE the band become
+                # obstacles, AND prior routes (extra_obstacles) stay obstacles - so the
+                # final route is collision-correct against the other wires even though
+                # the cached octree wasn't.
+                outside = ~band
+                if extra_obstacles is not None:
+                    outside = outside | np.asarray(extra_obstacles, dtype=bool)
+                cells = self._lat.plan(stack, wire, weights, connectivity, start_cell,
+                                       goal_cell, outside, clearance_m,
+                                       start_heading, goal_heading)
+                if cells is not None:
+                    return cells
+                _log.info("[piperouter] %s: band r=%d failed for wire %s - escalating",
+                          self.name, r, wire.id)
+        # no corridor / every band too tight -> full lattice (with prior routes), but
+        # ONLY when that graph is buildable at all - see _FULL_FALLBACK_EDGE_BUDGET.
+        blocked = blocked_mask(stack, wire, clearance_m, extra_obstacles)
+        n_free = int(blocked.size - int(blocked.sum()))
+        est_edges = float(n_free) * float(connectivity) * float(connectivity)
+        if est_edges > _FULL_FALLBACK_EDGE_BUDGET:
+            _log.warning("[piperouter] %s: full-lattice fallback skipped for wire %s "
+                         "(~%.1fB edges > budget) - reporting no_path",
+                         self.name, wire.id, est_edges / 1e9)
+            return None
         return self._lat.plan(stack, wire, weights, connectivity, start_cell, goal_cell,
                               extra_obstacles, clearance_m, start_heading, goal_heading)
 

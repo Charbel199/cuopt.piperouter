@@ -9,6 +9,43 @@ from scipy import ndimage
 from .models import GridFrame
 
 
+def _xp():
+    """cupy when PIPEROUTER_GPU_BUILD=1 and importable, else numpy (mirrors lattice.xp)."""
+    import os
+    if os.environ.get("PIPEROUTER_GPU_BUILD") == "1":
+        try:
+            import cupy
+            return cupy
+        except Exception:
+            pass
+    return np
+
+
+def dilate6(mask, k):
+    """6-connected binary dilation by k iterations via shifted ORs - exactly equivalent
+    to scipy.ndimage.binary_dilation(structure=generate_binary_structure(3,1),
+    iterations=k), but vectorized slab ops that run on numpy OR cupy (when
+    PIPEROUTER_GPU_BUILD=1), an order of magnitude faster than scipy's C loop on
+    big grids and ~100x on GPU."""
+    m = np.asarray(mask, dtype=bool)
+    if k <= 0 or not m.any() or m.all():
+        return m.copy()
+    xp = _xp()
+    out = xp.asarray(m)
+    for _ in range(int(k)):
+        nxt = out.copy()
+        nxt[1:, :, :] |= out[:-1, :, :]
+        nxt[:-1, :, :] |= out[1:, :, :]
+        nxt[:, 1:, :] |= out[:, :-1, :]
+        nxt[:, :-1, :] |= out[:, 1:, :]
+        nxt[:, :, 1:] |= out[:, :, :-1]
+        nxt[:, :, :-1] |= out[:, :, 1:]
+        out = nxt
+    if xp is not np:
+        out = xp.asnumpy(out)
+    return out
+
+
 @dataclass
 class GridStack:
     """The four aligned voxel fields produced by the extension's Warp pass."""
@@ -46,10 +83,7 @@ class GridStack:
         if cells <= 0:
             out = self.occupancy.copy()
         else:
-            structure = ndimage.generate_binary_structure(3, 1)
-            out = ndimage.binary_dilation(
-                self.occupancy.astype(bool), structure=structure, iterations=cells
-            ).astype(np.uint8)
+            out = dilate6(self.occupancy.astype(bool), cells).astype(np.uint8)
         cache[cells] = out
         return out
 
@@ -70,13 +104,14 @@ class GridStack:
         else:
             mask = self.clearance_class == class_id
         if cells > 0 and mask.any():
-            structure = ndimage.generate_binary_structure(3, 1)
-            mask = ndimage.binary_dilation(mask, structure=structure, iterations=cells)
+            mask = dilate6(mask, cells)
         cache[key] = mask
         return mask
 
     def save(self, path: str | Path) -> None:
-        np.savez_compressed(
+        # Uncompressed: the handoff file lives on tmpfs (/dev/shm), so compression
+        # only costs CPU (~seconds of zlib per solve at high resolution).
+        np.savez(
             path,
             bounds_min=self.frame.bounds_min,
             cell_size=np.float64(self.frame.cell_size),

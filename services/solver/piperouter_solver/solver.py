@@ -7,6 +7,7 @@ from scipy import ndimage
 
 from . import optimizers, planners
 from .lattice import ExpandedLatticeBuilder, LatticeBuilder, diagnose_no_path
+from .grids import dilate6
 from .models import RouteRequest, RouteResult, SolveReport
 
 # 6-neighbour steps for the nearest-free BFS used to rescue a buried endpoint.
@@ -89,7 +90,7 @@ class Solver:
         if extra_obstacles is not None:
             prior = np.asarray(extra_obstacles, dtype=bool)
             if rad_cells > 0 and prior.any():
-                prior = ndimage.binary_dilation(prior, structure=_ST6, iterations=rad_cells)
+                prior = dilate6(prior, rad_cells)
         # relocation target avoids mesh+radius, melt and prior tubes - but NOT the clearance
         # band (an endpoint is allowed to sit within clearance of a surface).
         reloc_blocked = planners.blocked_mask(stack, req.wire, 0.0, prior)
@@ -366,7 +367,7 @@ class Solver:
                     m[c] = True
                 rc = int(req.wire.radius_m / cell + 0.5 + 1e-9) if cell > 0 else 0
                 if rc > 0:
-                    m = ndimage.binary_dilation(m, structure=_ST6, iterations=rc)
+                    m = dilate6(m, rc)
                 occupied |= m
             results.append(res)
         return SolveReport(results=results)

@@ -20,6 +20,11 @@ class FilesystemSessionStore:
 
     def __init__(self, root: str | Path = DEFAULT_ROOT):
         self.root = Path(root)
+        # session_id -> (mtime_ns, size, GridStack). Re-voxelizing rewrites the file
+        # (new mtime) so a stale hit is impossible; a hit also carries over every
+        # per-stack lazy cache (scene octree, dilations, normalized cost fields),
+        # which is most of the win on repeat solves of the same scene.
+        self._cache: dict[str, tuple[int, int, GridStack]] = {}
 
     def grid_path(self, session_id: str) -> Path:
         _check_session_id(session_id)
@@ -32,7 +37,14 @@ class FilesystemSessionStore:
         return p
 
     def load_stack(self, session_id: str) -> GridStack:
-        return GridStack.load(self.grid_path(session_id))
+        p = self.grid_path(session_id)
+        st = p.stat()
+        hit = self._cache.get(session_id)
+        if hit is not None and hit[0] == st.st_mtime_ns and hit[1] == st.st_size:
+            return hit[2]
+        stack = GridStack.load(p)
+        self._cache[session_id] = (st.st_mtime_ns, st.st_size, stack)
+        return stack
 
     def exists(self, session_id: str) -> bool:
         return self.grid_path(session_id).exists()

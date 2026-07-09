@@ -58,12 +58,28 @@ def soft_cost_field(stack, wire, weights: dict) -> np.ndarray:
     w_surface = float(weights.get("surface", 0.0))
     w_thermal = float(weights.get("thermal", 0.0))
     w_em = float(weights.get("em", 0.0))
-    cost = (
-        w_surface * normalize(stack.surface_dist)
-        + w_thermal * normalize(stack.thermal)
-        + w_em * wire.em_sensitivity * normalize(stack.em)
-    )
-    return cost.astype(np.float32)
+    # The three normalized fields depend only on the stack (immutable per solve), and
+    # the combined cost only on the three effective weights - both cached, because
+    # route_all calls this once or twice per wire and min-max passes over big grids
+    # were a measurable share of high-resolution solves. Returned array is READ-ONLY
+    # by convention (all callers only read it).
+    norm = stack.__dict__.get("_norm_fields")
+    if norm is None:
+        norm = {"surface": normalize(stack.surface_dist),
+                "thermal": normalize(stack.thermal),
+                "em": normalize(stack.em)}
+        stack.__dict__["_norm_fields"] = norm
+    key = (round(w_surface, 9), round(w_thermal, 9),
+           round(w_em * float(wire.em_sensitivity), 9))
+    cache = stack.__dict__.setdefault("_soft_cache", {})
+    hit = cache.get(key)
+    if hit is not None:
+        return hit
+    cost = (w_surface * norm["surface"]
+            + w_thermal * norm["thermal"]
+            + key[2] * norm["em"]).astype(np.float32)
+    cache[key] = cost
+    return cost
 
 
 def melt_mask(stack, wire) -> np.ndarray:
@@ -71,8 +87,17 @@ def melt_mask(stack, wire) -> np.ndarray:
 
     These cells are removed from the graph entirely (the route physically cannot pass
     through a region that would melt the cable), as opposed to the soft thermal cost in
-    soft_cost_field which merely discourages warm-but-survivable regions."""
-    return stack.thermal > wire.max_temp_c
+    soft_cost_field which merely discourages warm-but-survivable regions.
+    Cached per temperature rating (thermal is immutable within a solve); the returned
+    mask is READ-ONLY by convention."""
+    cache = stack.__dict__.setdefault("_melt_cache", {})
+    key = round(float(wire.max_temp_c), 9)
+    hit = cache.get(key)
+    if hit is not None:
+        return hit
+    out = stack.thermal > wire.max_temp_c
+    cache[key] = out
+    return out
 
 
 # Tuning constants for the bend (turn) penalty. The penalty is returned in "metres of

@@ -264,13 +264,26 @@ class ExpandedLatticeBuilder:
             # else: buried in solid, or clearance-only -> leave blocked -> no_path
         free = ~blocked
 
-        # --- compact free-cell ordinals (C-order, matching np.argwhere) ---
-        flat_free = free.reshape(-1)
-        n_free = int(flat_free.sum())
-        cell_ord_flat = np.full(flat_free.size, -1, dtype=np.int64)
-        cell_ord_flat[flat_free] = np.arange(n_free, dtype=np.int64)
-        cell_ord = cell_ord_flat.reshape(nx, ny, nz)
-        ordinal_cells = np.argwhere(free).astype(np.int32)  # (n_free, 3)
+        # --- compact free-cell ordinals (C-order, matching argwhere) ---
+        # Built directly on xp: on GPU this replaces the two biggest host costs of the
+        # build (a grid-sized int64 full+scatter and np.argwhere) AND the upload of the
+        # ordinal grid - only the (n_free, 3) coordinate list comes back to host.
+        xp = _edge_array_module()
+        gpu_build = xp is not np
+        free_x = xp.asarray(free) if gpu_build else free
+        flat_free_x = free_x.reshape(-1)
+        n_free = int(flat_free_x.sum())
+        cell_ord_flat_x = xp.full(flat_free_x.size, -1, dtype=xp.int32)
+        cell_ord_flat_x[flat_free_x] = xp.arange(n_free, dtype=xp.int32)
+        cell_ord_x = cell_ord_flat_x.reshape(nx, ny, nz)
+        ordinal_cells = xp.argwhere(free_x).astype(xp.int32)  # (n_free, 3)
+        if gpu_build:
+            ordinal_cells = xp.asnumpy(ordinal_cells)
+
+        def _ord_at(c):
+            """Cell ordinal at (i,j,k) - a scalar pull from the device on GPU builds,
+            used only for the handful of source/goal endpoint cells."""
+            return int(cell_ord_x[c])
 
         source_id = n_free * H
         sink_id = n_free * H + 1
@@ -303,15 +316,20 @@ class ExpandedLatticeBuilder:
         dst_parts: list = []
         w_parts: list = []
 
-        # Edge assembly runs on `xp` (cupy on GPU, else numpy). The small per-cell masks
-        # (free/cell_ord/soft) were built on CPU; push just those to the device once
-        # (a few MB), then the huge bulk-edge arrays are produced ON the device and
-        # never round-trip to host. Source/sink edges are tiny -> kept on CPU (numpy).
-        xp = _edge_array_module()
-        gpu_build = xp is not np
-        free_x = xp.asarray(free) if gpu_build else free
-        cell_ord_x = xp.asarray(cell_ord) if gpu_build else cell_ord
-        soft_x = xp.asarray(soft) if gpu_build else soft
+        # Edge assembly runs on `xp` (cupy on GPU, else numpy): free/cell_ord already
+        # live on the device (built there above); the soft field's device copy is
+        # cached on the stack per weights (it is reused by every wire sharing weights),
+        # so the only fresh upload per wire is the free mask. The huge bulk-edge arrays
+        # are produced ON the device and never round-trip to host. Source/sink edges
+        # are tiny -> kept on CPU (numpy).
+        if gpu_build:
+            soft_dev = stack.__dict__.setdefault("_soft_dev_cache", {})
+            soft_x = soft_dev.get(id(soft))
+            if soft_x is None:
+                soft_x = xp.asarray(soft)
+                soft_dev[id(soft)] = soft_x
+        else:
+            soft_x = soft
         arange_h_x = xp.asarray(arange_h) if gpu_build else arange_h
         turn_lut_x = xp.asarray(turn_lut) if gpu_build else turn_lut
         step_len_x = xp.asarray(step_len) if gpu_build else step_len
@@ -354,8 +372,11 @@ class ExpandedLatticeBuilder:
             base = step_len_x[oi] * (1.0 + soft_b.astype(xp.float64))  # (M,)
             m = a_ord.shape[0]
             # each of the H entry headings of a -> the single dst node (b, oi)
-            src_parts.append((a_ord[:, None] * H + arange_h_x[None, :]).reshape(-1))
-            dst_node = (b_ord * H + oi)[:, None]  # (M, 1)
+            src_parts.append((a_ord.astype(xp.int64)[:, None] * H
+                              + arange_h_x[None, :]).reshape(-1))
+            # int64 before *H: ordinals are int32 now and n_free*H can pass 2^31 on
+            # huge dense grids
+            dst_node = (b_ord.astype(xp.int64) * H + oi)[:, None]  # (M, 1)
             dst_parts.append(xp.broadcast_to(dst_node, (m, H)).reshape(-1))
             w_parts.append((base[:, None] + turn_lut_x[:, oi][None, :]).reshape(-1))
 
@@ -403,7 +424,7 @@ class ExpandedLatticeBuilder:
                     cut = True
                     break
             if not cut:
-                b_ord = int(cell_ord[ni, nj, nk])
+                b_ord = _ord_at((ni, nj, nk))
                 base = (step_len[oi] * (1.0 + float(soft[ni, nj, nk]))
                         + _align_pen(start_heading, oi))
                 src_parts.append(np.array([source_id], dtype=np.int64))
@@ -411,7 +432,7 @@ class ExpandedLatticeBuilder:
                 w_parts.append(np.array([base], dtype=np.float64))
 
         # --- goal heading-nodes within the arrival cone -> sink (alignment-weighted) ---
-        g_ord = int(cell_ord[goal_cell])
+        g_ord = _ord_at(goal_cell)
         if g_ord >= 0:
             hs = np.nonzero(allowed_goal)[0].astype(np.int64)
             if hs.size:

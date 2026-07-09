@@ -49,7 +49,10 @@ def save_grids(path, bounds_min, cell_size, res_xyz, occupancy, surface_dist,
         # per-object clearance: class grid (0 = untagged) + metres per class id (1-based)
         extra["clearance_class"] = np.asarray(clearance_class, dtype=np.uint8)
         extra["clearance_values"] = np.asarray(clearance_values, dtype=np.float64)
-    np.savez_compressed(
+    # Uncompressed on purpose: the file lives on tmpfs (/dev/shm), so zlib would only
+    # burn CPU on both sides of the handoff - at high resolution that's ~1 GB of
+    # compress here + inflate in the solver per ROUTE ALL, for zero I/O benefit.
+    np.savez(
         path,
         bounds_min=np.asarray(bounds_min, dtype=np.float64),
         cell_size=np.float64(cell_size),
