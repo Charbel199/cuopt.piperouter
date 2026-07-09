@@ -1,0 +1,1773 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PipeRouter - Autonomous Wire Harness Routing | NVIDIA Blueprint</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@700;800&display=swap" rel="stylesheet">
+<style>
+/* ═══════════════════════════════════════════════
+   CSS CUSTOM PROPERTIES
+═══════════════════════════════════════════════ */
+:root {
+  --nvidia-green: #76b900;
+  --nvidia-green-dim: #5a8d00;
+  --nvidia-green-glow: rgba(118, 185, 0, 0.15);
+  --nvidia-dark: #0f0f0f;
+  --nvidia-dark-2: #1a1a1a;
+  --nvidia-dark-3: #242424;
+  --surface-light: #ffffff;
+  --surface-muted: #f8f9fa;
+  --surface-border: #e5e7eb;
+  --text-primary: #111111;
+  --text-secondary: #555555;
+  --text-muted: #888888;
+  --text-white: #ffffff;
+
+  /* Component palette */
+  --c-omniverse-bg: #e8f5e9;
+  --c-omniverse-border: #4caf50;
+  --c-warp-bg: #fff3e0;
+  --c-warp-border: #ff9800;
+  --c-solver-bg: #e8eaf6;
+  --c-solver-border: #5c6bc0;
+  --c-cugraph-bg: #f3e5f5;
+  --c-cugraph-border: #9c27b0;
+  --c-smoothing-bg: #fce4ec;
+  --c-smoothing-border: #e91e63;
+  --c-bundle-bg: #e0f7fa;
+  --c-bundle-border: #00bcd4;
+  --c-constraint-bg: #fff8e1;
+  --c-constraint-border: #ffc107;
+
+  --badge-gpu: #ff9800;
+  --badge-cpu: #5c6bc0;
+
+  --radius: 8px;
+  --radius-lg: 12px;
+  --shadow-card: 0 2px 12px rgba(0,0,0,0.07), 0 1px 3px rgba(0,0,0,0.05);
+  --shadow-card-hover: 0 8px 32px rgba(0,0,0,0.12), 0 2px 8px rgba(0,0,0,0.08);
+  --transition: all 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* ═══════════════════════════════════════════════
+   RESET & BASE
+═══════════════════════════════════════════════ */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  font-family: 'DM Sans', sans-serif;
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--text-primary);
+  background: var(--surface-light);
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: inherit; text-decoration: none; }
+
+/* ═══════════════════════════════════════════════
+   KEYFRAMES
+═══════════════════════════════════════════════ */
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.85); }
+}
+
+@keyframes flow-arrow {
+  0% { stroke-dashoffset: 24; }
+  100% { stroke-dashoffset: 0; }
+}
+
+@keyframes data-pulse {
+  0% { left: -8px; opacity: 0; }
+  10% { opacity: 1; }
+  90% { opacity: 1; }
+  100% { left: calc(100% + 8px); opacity: 0; }
+}
+
+@keyframes shimmer-badge {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255, 152, 0, 0.4); }
+  50% { box-shadow: 0 0 0 6px rgba(255, 152, 0, 0); }
+}
+
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(18px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes scan-line {
+  0% { top: 0; opacity: 0.6; }
+  100% { top: 100%; opacity: 0; }
+}
+
+/* ═══════════════════════════════════════════════
+   TOP NAV
+═══════════════════════════════════════════════ */
+.nav {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  background: var(--nvidia-dark);
+  border-bottom: 2px solid var(--nvidia-green);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 32px;
+  height: 52px;
+}
+
+.nav-left {
+  display: flex;
+  align-items: center;
+  gap: 0;
+}
+
+.nav-logo {
+  font-family: 'Syne', sans-serif;
+  font-weight: 800;
+  font-size: 17px;
+  color: var(--nvidia-green);
+  letter-spacing: 0.04em;
+  line-height: 1;
+}
+
+.nav-sep {
+  width: 1px;
+  height: 18px;
+  background: #3a3a3a;
+  margin: 0 14px;
+}
+
+.nav-breadcrumb {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  color: #666;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.nav-breadcrumb span {
+  color: #999;
+}
+
+.nav-right {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  color: #555;
+  letter-spacing: 0.05em;
+}
+
+/* ═══════════════════════════════════════════════
+   HERO
+═══════════════════════════════════════════════ */
+.hero {
+  background: var(--nvidia-dark);
+  position: relative;
+  overflow: hidden;
+  padding: 72px 32px 80px;
+}
+
+.hero::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 60% 40% at 70% 50%, rgba(118, 185, 0, 0.06) 0%, transparent 70%),
+    radial-gradient(ellipse 30% 60% at 10% 80%, rgba(92, 107, 192, 0.08) 0%, transparent 60%);
+  pointer-events: none;
+}
+
+/* Subtle scan line effect */
+.hero::after {
+  content: '';
+  position: absolute;
+  left: 0; right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(118,185,0,0.3), transparent);
+  animation: scan-line 5s linear infinite;
+  pointer-events: none;
+}
+
+/* Grid texture */
+.hero-grid-bg {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(255,255,255,0.015) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.015) 1px, transparent 1px);
+  background-size: 40px 40px;
+  pointer-events: none;
+}
+
+.hero-inner {
+  max-width: 1100px;
+  margin: 0 auto;
+  position: relative;
+  z-index: 1;
+}
+
+.hero-overline {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--nvidia-green);
+  margin-bottom: 18px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  animation: fade-up 0.6s ease both;
+}
+
+.hero-overline::before {
+  content: '';
+  display: block;
+  width: 28px;
+  height: 2px;
+  background: var(--nvidia-green);
+}
+
+.hero h1 {
+  font-family: 'Syne', sans-serif;
+  font-weight: 800;
+  font-size: clamp(28px, 4.5vw, 52px);
+  color: #f5f5f5;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  margin-bottom: 20px;
+  animation: fade-up 0.6s 0.1s ease both;
+}
+
+.hero h1 em {
+  font-style: normal;
+  color: var(--nvidia-green);
+}
+
+.hero-subtitle {
+  font-size: 16px;
+  color: #aaa;
+  line-height: 1.65;
+  max-width: 640px;
+  margin-bottom: 32px;
+  animation: fade-up 0.6s 0.2s ease both;
+}
+
+.hero-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 56px;
+  animation: fade-up 0.6s 0.3s ease both;
+}
+
+.hero-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 100px;
+  padding: 6px 14px;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 12px;
+  color: #ccc;
+  letter-spacing: 0.03em;
+}
+
+.hero-pill .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--nvidia-green);
+  animation: pulse-dot 2s ease-in-out infinite;
+}
+
+/* Pipeline flow visualization */
+.pipeline-flow {
+  animation: fade-up 0.6s 0.4s ease both;
+}
+
+.pipeline-flow-title {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #444;
+  margin-bottom: 16px;
+}
+
+.pipeline-steps {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+
+.pipeline-step {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.pipeline-node {
+  background: #1e1e1e;
+  border: 1px solid #333;
+  border-radius: var(--radius);
+  padding: 10px 14px;
+  text-align: center;
+  min-width: 100px;
+  position: relative;
+  overflow: hidden;
+}
+
+.pipeline-node::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+}
+
+.pipeline-node.step-usd::before { background: var(--c-omniverse-border); }
+.pipeline-node.step-voxel::before { background: var(--c-warp-border); }
+.pipeline-node.step-graph::before { background: var(--c-cugraph-border); }
+.pipeline-node.step-smooth::before { background: var(--c-smoothing-border); }
+.pipeline-node.step-tubes::before { background: var(--c-bundle-border); }
+
+.pipeline-node-label {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  color: #777;
+  margin-bottom: 3px;
+}
+
+.pipeline-node-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: #ddd;
+  white-space: nowrap;
+}
+
+.pipeline-badge {
+  display: inline-block;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 9px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 3px;
+  margin-top: 4px;
+  letter-spacing: 0.06em;
+}
+
+.pipeline-badge.gpu {
+  background: rgba(255,152,0,0.2);
+  color: #ff9800;
+  border: 1px solid rgba(255,152,0,0.3);
+}
+
+.pipeline-badge.cpu {
+  background: rgba(92,107,192,0.2);
+  color: #7986cb;
+  border: 1px solid rgba(92,107,192,0.3);
+}
+
+.pipeline-arrow {
+  width: 40px;
+  flex-shrink: 0;
+  position: relative;
+  height: 2px;
+  background: linear-gradient(90deg, #2a2a2a, #333);
+  overflow: visible;
+}
+
+.pipeline-arrow::after {
+  content: '';
+  position: absolute;
+  right: -1px;
+  top: -4px;
+  width: 0;
+  height: 0;
+  border-left: 7px solid #444;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+}
+
+/* Animated data pulse on arrows */
+.pipeline-arrow .pulse {
+  position: absolute;
+  top: -3px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--nvidia-green);
+  box-shadow: 0 0 6px var(--nvidia-green);
+  animation: data-pulse 2.5s ease-in-out infinite;
+}
+
+.pipeline-arrow .pulse:nth-child(2) { animation-delay: 0.5s; }
+.pipeline-arrow .pulse:nth-child(3) { animation-delay: 1.0s; }
+.pipeline-arrow .pulse:nth-child(4) { animation-delay: 1.5s; }
+
+/* ═══════════════════════════════════════════════
+   SECTION COMMON
+═══════════════════════════════════════════════ */
+section { padding: 72px 32px; }
+
+.section-inner {
+  max-width: 1100px;
+  margin: 0 auto;
+}
+
+.section-label {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--nvidia-green);
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.section-label::before {
+  content: '';
+  display: block;
+  width: 20px;
+  height: 2px;
+  background: var(--nvidia-green);
+}
+
+.section-title {
+  font-family: 'Syne', sans-serif;
+  font-weight: 800;
+  font-size: clamp(22px, 3vw, 34px);
+  letter-spacing: -0.02em;
+  color: var(--text-primary);
+  margin-bottom: 8px;
+}
+
+.section-title.light { color: #f0f0f0; }
+
+.section-desc {
+  font-size: 15px;
+  color: var(--text-secondary);
+  max-width: 560px;
+  line-height: 1.65;
+  margin-bottom: 48px;
+}
+
+.section-desc.light { color: #888; }
+
+/* ═══════════════════════════════════════════════
+   SECTION: WHAT YOU CAN BUILD
+═══════════════════════════════════════════════ */
+.build-section { background: var(--surface-light); }
+
+.build-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 20px;
+}
+
+.build-card {
+  background: var(--surface-light);
+  border: 1px solid var(--surface-border);
+  border-radius: var(--radius-lg);
+  padding: 28px;
+  box-shadow: var(--shadow-card);
+  transition: var(--transition);
+  position: relative;
+  overflow: hidden;
+}
+
+.build-card::before {
+  content: '';
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  height: 3px;
+  background: var(--nvidia-green);
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform 0.3s ease;
+}
+
+.build-card:hover {
+  box-shadow: var(--shadow-card-hover);
+  transform: translateY(-2px);
+  border-color: rgba(118, 185, 0, 0.3);
+}
+
+.build-card:hover::before { transform: scaleX(1); }
+
+.build-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 10px;
+  background: var(--nvidia-green-glow);
+  border: 1px solid rgba(118,185,0,0.25);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 18px;
+}
+
+.build-icon svg { width: 24px; height: 24px; }
+
+.build-card h3 {
+  font-family: 'Syne', sans-serif;
+  font-weight: 700;
+  font-size: 17px;
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
+  margin-bottom: 8px;
+}
+
+.build-card p {
+  font-size: 14px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+/* ═══════════════════════════════════════════════
+   SECTION: ARCHITECTURE
+═══════════════════════════════════════════════ */
+.arch-section { background: var(--surface-muted); }
+
+.arch-diagram-wrapper {
+  background: white;
+  border: 1px solid var(--surface-border);
+  border-radius: var(--radius-lg);
+  padding: 36px 28px;
+  box-shadow: var(--shadow-card);
+  overflow-x: auto;
+}
+
+.arch-diagram-wrapper svg {
+  display: block;
+  min-width: 800px;
+  width: 100%;
+  max-width: 1040px;
+  margin: 0 auto;
+}
+
+/* Data flow strip */
+.data-flow-strip {
+  margin-top: 28px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+  gap: 1px;
+  background: var(--surface-border);
+  border: 1px solid var(--surface-border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.flow-step {
+  background: white;
+  padding: 14px 12px;
+  text-align: center;
+}
+
+.flow-step-num {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  color: var(--nvidia-green);
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.flow-step-name {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1.3;
+}
+
+/* ═══════════════════════════════════════════════
+   SECTION: COMPONENTS
+═══════════════════════════════════════════════ */
+.components-section { background: var(--surface-light); }
+
+.components-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 18px;
+}
+
+.comp-card {
+  border-radius: var(--radius-lg);
+  border: 1px solid;
+  padding: 24px 24px 24px 20px;
+  box-shadow: var(--shadow-card);
+  transition: var(--transition);
+  position: relative;
+  overflow: hidden;
+}
+
+.comp-card::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; bottom: 0;
+  width: 4px;
+  border-radius: 2px 0 0 2px;
+}
+
+.comp-card:hover {
+  box-shadow: var(--shadow-card-hover);
+  transform: translateY(-2px);
+}
+
+/* Component card themes */
+.comp-card.warp    { background: var(--c-warp-bg);       border-color: rgba(255,152,0,0.3); }
+.comp-card.warp::before { background: var(--c-warp-border); }
+
+.comp-card.lattice { background: var(--c-solver-bg);     border-color: rgba(92,107,192,0.3); }
+.comp-card.lattice::before { background: var(--c-solver-border); }
+
+.comp-card.cugraph { background: var(--c-cugraph-bg);    border-color: rgba(156,39,176,0.3); }
+.comp-card.cugraph::before { background: var(--c-cugraph-border); }
+
+.comp-card.smooth  { background: var(--c-smoothing-bg);  border-color: rgba(233,30,99,0.3); }
+.comp-card.smooth::before { background: var(--c-smoothing-border); }
+
+.comp-card.bundle  { background: var(--c-bundle-bg);     border-color: rgba(0,188,212,0.3); }
+.comp-card.bundle::before { background: var(--c-bundle-border); }
+
+.comp-card.constraint { background: var(--c-constraint-bg); border-color: rgba(255,193,7,0.3); }
+.comp-card.constraint::before { background: var(--c-constraint-border); }
+
+.comp-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 6px;
+  gap: 10px;
+}
+
+.comp-name {
+  font-family: 'Syne', sans-serif;
+  font-weight: 700;
+  font-size: 16px;
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
+  padding-left: 12px;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 3px 9px;
+  border-radius: 100px;
+  letter-spacing: 0.08em;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.badge.gpu {
+  background: rgba(255,152,0,0.18);
+  color: #d97706;
+  border: 1px solid rgba(255,152,0,0.4);
+  animation: shimmer-badge 2.5s ease-in-out infinite;
+}
+
+.badge.cpu {
+  background: rgba(92,107,192,0.15);
+  color: var(--badge-cpu);
+  border: 1px solid rgba(92,107,192,0.3);
+}
+
+.badge::before {
+  content: '';
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.comp-role {
+  font-size: 12px;
+  color: var(--text-muted);
+  padding-left: 12px;
+  margin-bottom: 14px;
+  font-style: italic;
+}
+
+.comp-bullets {
+  list-style: none;
+  padding-left: 12px;
+}
+
+.comp-bullets li {
+  font-size: 13px;
+  color: var(--text-secondary);
+  padding: 3px 0 3px 16px;
+  position: relative;
+  line-height: 1.45;
+}
+
+.comp-bullets li::before {
+  content: '▸';
+  position: absolute;
+  left: 0;
+  color: var(--nvidia-green);
+  font-size: 10px;
+  top: 5px;
+}
+
+/* ═══════════════════════════════════════════════
+   SECTION: DATA FLOW
+═══════════════════════════════════════════════ */
+.dataflow-section {
+  background: var(--nvidia-dark);
+  position: relative;
+  overflow: hidden;
+}
+
+.dataflow-section::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 50% 60% at 20% 50%, rgba(92,107,192,0.08) 0%, transparent 70%),
+    radial-gradient(ellipse 40% 40% at 80% 30%, rgba(118,185,0,0.06) 0%, transparent 60%);
+  pointer-events: none;
+}
+
+.steps-flow {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.step-row {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+}
+
+.step-number-col {
+  width: 56px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.step-num-circle {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 2px solid var(--nvidia-green);
+  background: rgba(118,185,0,0.1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--nvidia-green);
+  flex-shrink: 0;
+  position: relative;
+  z-index: 1;
+}
+
+.step-line {
+  flex: 1;
+  width: 2px;
+  background: #222;
+  min-height: 20px;
+}
+
+.step-content {
+  flex: 1;
+  padding: 0 0 28px 20px;
+  padding-top: 6px;
+}
+
+.step-content:last-child { padding-bottom: 0; }
+
+.step-title {
+  font-family: 'Syne', sans-serif;
+  font-weight: 700;
+  font-size: 15px;
+  color: #e8e8e8;
+  margin-bottom: 4px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.step-detail {
+  font-size: 13px;
+  color: #666;
+  font-family: 'IBM Plex Mono', monospace;
+  line-height: 1.5;
+}
+
+/* ═══════════════════════════════════════════════
+   SECTION: TECH REQUIREMENTS
+═══════════════════════════════════════════════ */
+.reqs-section { background: var(--surface-light); }
+
+.reqs-table {
+  width: 100%;
+  border-collapse: collapse;
+  border: 1px solid var(--surface-border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  box-shadow: var(--shadow-card);
+}
+
+.reqs-table thead {
+  background: var(--nvidia-dark);
+}
+
+.reqs-table thead th {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #999;
+  padding: 14px 20px;
+  text-align: left;
+  font-weight: 500;
+}
+
+.reqs-table thead th:first-child { color: var(--nvidia-green); }
+
+.reqs-table tbody tr {
+  border-top: 1px solid var(--surface-border);
+  transition: background 0.15s ease;
+}
+
+.reqs-table tbody tr:hover { background: var(--surface-muted); }
+
+.reqs-table tbody td {
+  padding: 14px 20px;
+  font-size: 14px;
+}
+
+.reqs-table tbody td:first-child {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  width: 240px;
+}
+
+.reqs-table tbody td:last-child {
+  color: var(--text-secondary);
+}
+
+.req-tag {
+  display: inline-block;
+  background: var(--nvidia-green-glow);
+  border: 1px solid rgba(118,185,0,0.3);
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  color: var(--nvidia-green-dim);
+  font-weight: 600;
+  margin-left: 8px;
+}
+
+/* ═══════════════════════════════════════════════
+   SECTION: DEBUG
+═══════════════════════════════════════════════ */
+.debug-section { background: var(--surface-muted); }
+
+.debug-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+}
+
+.debug-card {
+  background: white;
+  border: 1px solid var(--surface-border);
+  border-radius: var(--radius-lg);
+  padding: 22px;
+  box-shadow: var(--shadow-card);
+  transition: var(--transition);
+}
+
+.debug-card:hover {
+  box-shadow: var(--shadow-card-hover);
+  transform: translateY(-2px);
+  border-color: rgba(118,185,0,0.3);
+}
+
+.debug-icon {
+  width: 40px;
+  height: 40px;
+  background: var(--nvidia-dark);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 14px;
+}
+
+.debug-icon svg { width: 20px; height: 20px; }
+
+.debug-card h4 {
+  font-family: 'Syne', sans-serif;
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--text-primary);
+  margin-bottom: 6px;
+}
+
+.debug-card p {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.55;
+}
+
+.debug-tag {
+  display: inline-block;
+  margin-top: 10px;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: 3px;
+  background: #1a1a1a;
+  color: #76b900;
+  letter-spacing: 0.05em;
+}
+
+/* ═══════════════════════════════════════════════
+   FOOTER
+═══════════════════════════════════════════════ */
+.footer {
+  background: var(--nvidia-dark);
+  border-top: 3px solid var(--nvidia-green);
+  padding: 32px 32px;
+}
+
+.footer-inner {
+  max-width: 1100px;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.footer-logo {
+  font-family: 'Syne', sans-serif;
+  font-weight: 800;
+  font-size: 14px;
+  color: var(--nvidia-green);
+  letter-spacing: 0.04em;
+}
+
+.footer-copy {
+  font-size: 12px;
+  color: #555;
+}
+
+.footer-tag {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  color: #555;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.footer-tag::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--nvidia-green);
+}
+
+/* ═══════════════════════════════════════════════
+   RESPONSIVE
+═══════════════════════════════════════════════ */
+@media (max-width: 768px) {
+  section { padding: 48px 20px; }
+  .nav { padding: 0 20px; }
+  .hero { padding: 48px 20px 56px; }
+  .nav-right { display: none; }
+  .pipeline-steps { gap: 0; }
+  .pipeline-arrow { width: 24px; }
+  .pipeline-node { min-width: 80px; padding: 8px 10px; }
+  .comp-card-header { flex-wrap: wrap; }
+}
+
+/* ═══════════════════════════════════════════════
+   DIVIDER
+═══════════════════════════════════════════════ */
+.section-divider {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--surface-border), transparent);
+  max-width: 1100px;
+  margin: 0 auto;
+}
+
+</style>
+</head>
+<body>
+
+<!-- ══════════════════════════════════════════
+     NAV
+══════════════════════════════════════════ -->
+<nav class="nav">
+  <div class="nav-left">
+    <span class="nav-logo">NVIDIA</span>
+    <div class="nav-sep"></div>
+    <span class="nav-breadcrumb">Blueprints <span>/ PipeRouter</span></span>
+  </div>
+  <div class="nav-right">v2.0 &nbsp;·&nbsp; Omniverse Kit 110</div>
+</nav>
+
+
+<!-- ══════════════════════════════════════════
+     HERO
+══════════════════════════════════════════ -->
+<section class="hero">
+  <div class="hero-grid-bg"></div>
+  <div class="hero-inner">
+
+    <div class="hero-overline">NVIDIA Blueprint</div>
+
+    <h1>PipeRouter - <em>Autonomous</em><br>Wire Harness Routing</h1>
+
+    <p class="hero-subtitle">
+      GPU-accelerated routing of automotive wire harnesses and fluid pipes through complex USD scenes
+      in NVIDIA Omniverse, powered by cuGraph, Warp, and real-time fibre-neutre smoothing.
+    </p>
+
+    <div class="hero-pills">
+      <span class="hero-pill"><span class="dot"></span>14 Wire Types</span>
+      <span class="hero-pill"><span class="dot"></span>4× Faster with GPU Build</span>
+      <span class="hero-pill"><span class="dot"></span>Omniverse Kit 110</span>
+      <span class="hero-pill"><span class="dot"></span>~270ms per wire (cuGraph)</span>
+    </div>
+
+    <div class="pipeline-flow">
+      <div class="pipeline-flow-title">End-to-end routing pipeline</div>
+      <div class="pipeline-steps">
+
+        <div class="pipeline-step">
+          <div class="pipeline-node step-usd">
+            <div class="pipeline-node-label">INPUT</div>
+            <div class="pipeline-node-name">USD Scene</div>
+            <span class="pipeline-badge cpu">KIT</span>
+          </div>
+        </div>
+
+        <div class="pipeline-arrow">
+          <span class="pulse"></span>
+        </div>
+
+        <div class="pipeline-step">
+          <div class="pipeline-node step-voxel">
+            <div class="pipeline-node-label">VOXELIZE</div>
+            <div class="pipeline-node-name">Warp Grid</div>
+            <span class="pipeline-badge gpu">GPU</span>
+          </div>
+        </div>
+
+        <div class="pipeline-arrow">
+          <span class="pulse"></span>
+        </div>
+
+        <div class="pipeline-step">
+          <div class="pipeline-node step-graph">
+            <div class="pipeline-node-label">PATHFIND</div>
+            <div class="pipeline-node-name">cuGraph SSSP</div>
+            <span class="pipeline-badge gpu">GPU</span>
+          </div>
+        </div>
+
+        <div class="pipeline-arrow">
+          <span class="pulse"></span>
+        </div>
+
+        <div class="pipeline-step">
+          <div class="pipeline-node step-smooth">
+            <div class="pipeline-node-label">SMOOTH</div>
+            <div class="pipeline-node-name">Fibre-Neutre</div>
+            <span class="pipeline-badge cpu">CPU</span>
+          </div>
+        </div>
+
+        <div class="pipeline-arrow">
+          <span class="pulse"></span>
+        </div>
+
+        <div class="pipeline-step">
+          <div class="pipeline-node step-tubes">
+            <div class="pipeline-node-label">OUTPUT</div>
+            <div class="pipeline-node-name">USD Tubes</div>
+            <span class="pipeline-badge cpu">KIT</span>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+  </div>
+</section>
+
+
+<!-- ══════════════════════════════════════════
+     WHAT YOU CAN BUILD
+══════════════════════════════════════════ -->
+<section class="build-section">
+  <div class="section-inner">
+    <div class="section-label">Applications</div>
+    <h2 class="section-title">What You Can Build</h2>
+    <p class="section-desc">Route any wire, cable, or fluid pipe through complex 3D geometry with collision avoidance, thermal awareness, and physical constraints - all in Omniverse.</p>
+
+    <div class="build-grid">
+      <div class="build-card">
+        <div class="build-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="#76b900" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z"/>
+            <path d="M8 12h8M12 8v8"/>
+            <circle cx="8" cy="8" r="1.5" fill="#76b900" stroke="none"/>
+            <circle cx="16" cy="16" r="1.5" fill="#76b900" stroke="none"/>
+          </svg>
+        </div>
+        <h3>Automotive Harness Routing</h3>
+        <p>Route full automotive wire harnesses with up to 14 wire classes simultaneously through complex CAD-imported USD scenes, enforcing thermal melt limits and EMF separation constraints.</p>
+      </div>
+
+      <div class="build-card">
+        <div class="build-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="#76b900" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 8h16M4 12h16M4 16h16"/>
+            <path d="M2 6l2 2-2 2M2 10l2 2-2 2M2 14l2 2-2 2"/>
+          </svg>
+        </div>
+        <h3>Multi-Wire Bundling</h3>
+        <p>Group same-kind wires into shared trunk routes using combined-diameter physics (√Σd²). The two-phase bundle router finds the optimal shared trunk before splitting into individual branches.</p>
+      </div>
+
+      <div class="build-card">
+        <div class="build-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="#76b900" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="3" width="7" height="7" rx="1"/>
+            <rect x="14" y="3" width="7" height="7" rx="1"/>
+            <rect x="3" y="14" width="7" height="7" rx="1"/>
+            <path d="M14 17.5h2a2 2 0 0 0 2-2V14M10 6.5h4"/>
+            <path d="M6.5 10v4"/>
+          </svg>
+        </div>
+        <h3>Constraint-Aware Paths</h3>
+        <p>Define hard constraints (collision, clearance, waypoints) and soft penalties (surface-hug, bend radius, thermal avoidance, EM avoidance) through interactive UI sliders - paths update in real time.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="section-divider"></div>
+
+
+<!-- ══════════════════════════════════════════
+     ARCHITECTURE DIAGRAM
+══════════════════════════════════════════ -->
+<section class="arch-section">
+  <div class="section-inner">
+    <div class="section-label">System Design</div>
+    <h2 class="section-title">Blueprint Architecture</h2>
+    <p class="section-desc">A two-process architecture: the Omniverse Kit extension owns USD I/O and the panel UI; a Docker container runs the GPU-heavy solver, communicating via shared memory.</p>
+
+    <div class="arch-diagram-wrapper">
+      <svg viewBox="0 0 1040 420" xmlns="http://www.w3.org/2000/svg" font-family="'IBM Plex Mono', monospace">
+
+        <!-- Background -->
+        <rect width="1040" height="420" fill="white"/>
+
+        <!-- Subtle grid -->
+        <defs>
+          <pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse">
+            <path d="M 20 0 L 0 0 0 20" fill="none" stroke="#f0f0f0" stroke-width="0.5"/>
+          </pattern>
+          <marker id="arrow-green" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+            <path d="M0,0 L0,6 L8,3 z" fill="#76b900"/>
+          </marker>
+          <marker id="arrow-gray" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+            <path d="M0,0 L0,6 L8,3 z" fill="#999"/>
+          </marker>
+          <marker id="arrow-purple" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+            <path d="M0,0 L0,6 L8,3 z" fill="#9c27b0"/>
+          </marker>
+          <marker id="arrow-green-up" markerWidth="8" markerHeight="8" refX="3" refY="6" orient="auto">
+            <path d="M0,6 L6,6 L3,0 z" fill="#76b900"/>
+          </marker>
+        </defs>
+        <rect width="1040" height="420" fill="url(#grid)"/>
+
+        <!-- ── LEFT BOX: Omniverse Extension ── -->
+        <rect x="30" y="50" width="330" height="320" rx="12"
+              fill="#e8f5e9" stroke="#4caf50" stroke-width="2"/>
+        <!-- Header bar -->
+        <rect x="30" y="50" width="330" height="36" rx="12" fill="#4caf50"/>
+        <rect x="30" y="74" width="330" height="12" fill="#4caf50"/>
+
+        <text x="195" y="73" text-anchor="middle" fill="white"
+              font-size="13" font-weight="600" letter-spacing="0.5">Omniverse Kit Extension</text>
+
+        <!-- Sub-components inside left box -->
+        <!-- Panel UI -->
+        <rect x="52" y="105" width="130" height="56" rx="6"
+              fill="white" stroke="#4caf50" stroke-width="1.5"/>
+        <text x="117" y="130" text-anchor="middle" fill="#2e7d32" font-size="11" font-weight="600">Panel UI</text>
+        <text x="117" y="146" text-anchor="middle" fill="#888" font-size="9">Route controls · Sliders</text>
+        <text x="117" y="156" text-anchor="middle" fill="#888" font-size="9">Wire class selector</text>
+
+        <!-- RouterSession -->
+        <rect x="198" y="105" width="140" height="56" rx="6"
+              fill="white" stroke="#4caf50" stroke-width="1.5"/>
+        <text x="268" y="130" text-anchor="middle" fill="#2e7d32" font-size="11" font-weight="600">RouterSession</text>
+        <text x="268" y="146" text-anchor="middle" fill="#888" font-size="9">State machine · Wire</text>
+        <text x="268" y="156" text-anchor="middle" fill="#888" font-size="9">specs · USD authoring</text>
+
+        <!-- Warp Voxelizer -->
+        <rect x="52" y="186" width="130" height="68" rx="6"
+              fill="#fff8f0" stroke="#ff9800" stroke-width="1.5"/>
+        <text x="117" y="206" text-anchor="middle" fill="#e65100" font-size="11" font-weight="600">Warp Voxelizer</text>
+        <text x="117" y="220" text-anchor="middle" fill="#888" font-size="9">USD → occupancy grid</text>
+        <text x="117" y="232" text-anchor="middle" fill="#888" font-size="9">Thermal + EM fields</text>
+        <!-- GPU badge -->
+        <rect x="75" y="241" width="36" height="14" rx="3" fill="#ff9800"/>
+        <text x="93" y="252" text-anchor="middle" fill="white" font-size="9" font-weight="600">GPU</text>
+
+        <!-- scene_ops -->
+        <rect x="198" y="186" width="140" height="68" rx="6"
+              fill="white" stroke="#4caf50" stroke-width="1.5"/>
+        <text x="268" y="206" text-anchor="middle" fill="#2e7d32" font-size="11" font-weight="600">scene_ops</text>
+        <text x="268" y="220" text-anchor="middle" fill="#888" font-size="9">USD traversal · mesh</text>
+        <text x="268" y="232" text-anchor="middle" fill="#888" font-size="9">extraction · BasisCurves</text>
+        <text x="268" y="246" text-anchor="middle" fill="#888" font-size="9">tube authoring</text>
+
+        <!-- debug_views -->
+        <rect x="52" y="275" width="286" height="76" rx="6"
+              fill="white" stroke="#4caf50" stroke-width="1.5" stroke-dasharray="5,3"/>
+        <text x="195" y="295" text-anchor="middle" fill="#2e7d32" font-size="11" font-weight="600">debug_views</text>
+        <text x="195" y="311" text-anchor="middle" fill="#888" font-size="9">Wire cells · Grid vs Smooth · Soft-cost terrain · Bend-radius heatmap</text>
+        <text x="195" y="325" text-anchor="middle" fill="#aaa" font-size="9" font-style="italic">Optional debug overlays - toggle per-wire</text>
+        <!-- dashed label -->
+        <rect x="145" y="273" width="100" height="14" fill="#e8f5e9"/>
+        <text x="195" y="283" text-anchor="middle" fill="#4caf50" font-size="9" font-weight="600">DEBUG VIEWS</text>
+
+        <!-- ── CENTER: Shared Memory Bridge ── -->
+        <rect x="390" y="188" width="140" height="92" rx="20"
+              fill="#f3e5f5" stroke="#9c27b0" stroke-width="2"/>
+        <text x="460" y="224" text-anchor="middle" fill="#6a1b9a" font-size="11" font-weight="600">/dev/shm</text>
+        <text x="460" y="240" text-anchor="middle" fill="#6a1b9a" font-size="11" font-weight="600">GridStack</text>
+        <text x="460" y="258" text-anchor="middle" fill="#ab47bc" font-size="9">shared tmpfs</text>
+        <!-- Up/down arrows on bridge -->
+        <text x="460" y="276" text-anchor="middle" fill="#9c27b0" font-size="14">⇅</text>
+
+        <!-- HTTP Arrow -->
+        <line x1="460" y1="140" x2="460" y2="188"
+              stroke="#9c27b0" stroke-width="1.5" stroke-dasharray="6,3"
+              marker-end="url(#arrow-purple)"/>
+        <rect x="402" y="148" width="116" height="16" rx="3" fill="#f8f8f8" stroke="#e0e0e0" stroke-width="1"/>
+        <text x="460" y="160" text-anchor="middle" fill="#9c27b0" font-size="9" font-weight="600">HTTP POST /solve_all</text>
+
+        <!-- ── RIGHT BOX: Solver Container ── -->
+        <rect x="630" y="50" width="380" height="320" rx="12"
+              fill="#e8eaf6" stroke="#5c6bc0" stroke-width="2"/>
+        <!-- Header bar -->
+        <rect x="630" y="50" width="380" height="36" rx="12" fill="#5c6bc0"/>
+        <rect x="630" y="74" width="380" height="12" fill="#5c6bc0"/>
+        <text x="820" y="73" text-anchor="middle" fill="white"
+              font-size="13" font-weight="600" letter-spacing="0.5">Solver Container (Docker)</text>
+
+        <!-- FastAPI -->
+        <rect x="652" y="105" width="336" height="46" rx="6"
+              fill="white" stroke="#5c6bc0" stroke-width="1.5"/>
+        <text x="820" y="124" text-anchor="middle" fill="#283593" font-size="11" font-weight="600">FastAPI  /solve_all · /ping · /reset</text>
+        <text x="820" y="140" text-anchor="middle" fill="#888" font-size="9">Async route dispatch · Per-wire job management · Result streaming</text>
+
+        <!-- Lattice Builder -->
+        <rect x="652" y="170" width="156" height="74" rx="6"
+              fill="#fff8f0" stroke="#ff9800" stroke-width="1.5"/>
+        <text x="730" y="193" text-anchor="middle" fill="#e65100" font-size="11" font-weight="600">Lattice Builder</text>
+        <text x="730" y="208" text-anchor="middle" fill="#888" font-size="9">Voxel → heading state</text>
+        <text x="730" y="220" text-anchor="middle" fill="#888" font-size="9">space expansion</text>
+        <text x="730" y="232" text-anchor="middle" fill="#888" font-size="9">cupy zero-copy</text>
+        <!-- GPU badge -->
+        <rect x="706" y="237" width="36" height="14" rx="3" fill="#ff9800"/>
+        <text x="724" y="248" text-anchor="middle" fill="white" font-size="9" font-weight="600">GPU</text>
+
+        <!-- cuGraph SSSP -->
+        <rect x="832" y="170" width="156" height="74" rx="6"
+              fill="#f9f0fc" stroke="#9c27b0" stroke-width="1.5"/>
+        <text x="910" y="193" text-anchor="middle" fill="#6a1b9a" font-size="11" font-weight="600">cuGraph SSSP</text>
+        <text x="910" y="208" text-anchor="middle" fill="#888" font-size="9">Dijkstra on directed</text>
+        <text x="910" y="220" text-anchor="middle" fill="#888" font-size="9">heading graph ~270ms</text>
+        <text x="910" y="232" text-anchor="middle" fill="#888" font-size="9">scipy CPU fallback</text>
+        <!-- GPU badge -->
+        <rect x="886" y="237" width="36" height="14" rx="3" fill="#9c27b0"/>
+        <text x="904" y="248" text-anchor="middle" fill="white" font-size="9" font-weight="600">GPU</text>
+
+        <!-- Smoothing -->
+        <rect x="652" y="264" width="156" height="74" rx="6"
+              fill="#fce4ec" stroke="#e91e63" stroke-width="1.5"/>
+        <text x="730" y="284" text-anchor="middle" fill="#880e4f" font-size="11" font-weight="600">Fibre-Neutre</text>
+        <text x="730" y="296" text-anchor="middle" fill="#880e4f" font-size="11" font-weight="600">Smoothing</text>
+        <text x="730" y="311" text-anchor="middle" fill="#888" font-size="9">Least-squares energy</text>
+        <text x="730" y="323" text-anchor="middle" fill="#888" font-size="9">min · obstacle loop</text>
+        <!-- CPU badge -->
+        <rect x="706" y="330" width="36" height="14" rx="3" fill="#5c6bc0"/>
+        <text x="724" y="341" text-anchor="middle" fill="white" font-size="9" font-weight="600">CPU</text>
+
+        <!-- Bundle Router -->
+        <rect x="832" y="264" width="156" height="74" rx="6"
+              fill="#e0f7fa" stroke="#00bcd4" stroke-width="1.5"/>
+        <text x="910" y="284" text-anchor="middle" fill="#006064" font-size="11" font-weight="600">Bundle Router</text>
+        <text x="910" y="299" text-anchor="middle" fill="#888" font-size="9">Trunk + branch phases</text>
+        <text x="910" y="311" text-anchor="middle" fill="#888" font-size="9">combined diam √Σd²</text>
+        <text x="910" y="323" text-anchor="middle" fill="#888" font-size="9">same-type grouping</text>
+        <!-- CPU badge -->
+        <rect x="886" y="330" width="36" height="14" rx="3" fill="#00bcd4"/>
+        <text x="904" y="341" text-anchor="middle" fill="white" font-size="9" font-weight="600">CPU</text>
+
+        <!-- ── CONNECTOR ARROWS ── -->
+        <!-- Kit extension → bridge (right arrow from ext box to bridge) -->
+        <line x1="360" y1="234" x2="390" y2="234"
+              stroke="#76b900" stroke-width="2"
+              marker-end="url(#arrow-green)"/>
+
+        <!-- Bridge → solver container (right arrow) -->
+        <line x1="530" y1="234" x2="630" y2="234"
+              stroke="#76b900" stroke-width="2"
+              marker-end="url(#arrow-green)"/>
+
+        <!-- Lattice → cuGraph internal arrow -->
+        <line x1="808" y1="207" x2="832" y2="207"
+              stroke="#5c6bc0" stroke-width="1.5"
+              marker-end="url(#arrow-gray)"/>
+
+        <!-- cuGraph → Smoothing internal arrow (down) -->
+        <line x1="910" y1="244" x2="910" y2="254" stroke="#aaa" stroke-width="1.5"/>
+        <line x1="910" y1="254" x2="730" y2="254" stroke="#aaa" stroke-width="1.5"/>
+        <line x1="730" y1="254" x2="730" y2="264" stroke="#aaa" stroke-width="1.5"
+              marker-end="url(#arrow-gray)"/>
+
+      </svg>
+    </div>
+
+    <!-- Data flow strip -->
+    <div class="data-flow-strip">
+      <div class="flow-step">
+        <div class="flow-step-num">01</div>
+        <div class="flow-step-name">Load USD Stage</div>
+      </div>
+      <div class="flow-step">
+        <div class="flow-step-num">02</div>
+        <div class="flow-step-name">Warp Voxelize</div>
+      </div>
+      <div class="flow-step">
+        <div class="flow-step-num">03</div>
+        <div class="flow-step-name">Save GridStack</div>
+      </div>
+      <div class="flow-step">
+        <div class="flow-step-num">04</div>
+        <div class="flow-step-name">POST /solve_all</div>
+      </div>
+      <div class="flow-step">
+        <div class="flow-step-num">05</div>
+        <div class="flow-step-name">Build Graph</div>
+      </div>
+      <div class="flow-step">
+        <div class="flow-step-num">06</div>
+        <div class="flow-step-name">cuGraph SSSP</div>
+      </div>
+      <div class="flow-step">
+        <div class="flow-step-num">07</div>
+        <div class="flow-step-name">Smooth Path</div>
+      </div>
+      <div class="flow-step">
+        <div class="flow-step-num">08</div>
+        <div class="flow-step-name">Author Tubes</div>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<div class="section-divider"></div>
+
+
+<!-- ══════════════════════════════════════════
+     COMPONENTS
+══════════════════════════════════════════ -->
+<section class="components-section">
+  <div class="section-inner">
+    <div class="section-label">Deep Dive</div>
+    <h2 class="section-title">Core Components</h2>
+    <p class="section-desc">Six specialized modules, each with a precise role in the routing pipeline - from raw USD geometry to smooth, physics-valid tube paths authored back into the stage.</p>
+
+    <div class="components-grid">
+
+      <div class="comp-card warp">
+        <div class="comp-card-header">
+          <div class="comp-name">Warp Voxelizer</div>
+          <span class="badge gpu">GPU</span>
+        </div>
+        <div class="comp-role">Converts USD meshes to a 3D occupancy + field grid</div>
+        <ul class="comp-bullets">
+          <li>Winding-number sign test for inside/outside classification</li>
+          <li>Thermal field and EM field layers baked alongside occupancy</li>
+          <li>~1ms per rebuild after Warp JIT compilation warms up</li>
+          <li>Configurable voxel resolution; supports incremental rebuild on scene change</li>
+        </ul>
+      </div>
+
+      <div class="comp-card lattice">
+        <div class="comp-card-header">
+          <div class="comp-name">Lattice Builder</div>
+          <span class="badge gpu">GPU</span>
+        </div>
+        <div class="comp-role">Expands voxel grid to heading-expanded state space</div>
+        <ul class="comp-bullets">
+          <li>Each cell split into N heading buckets (6 / 18 / 26 connectivity)</li>
+          <li>Edge costs encode bend penalty, thermal, EM, and surface-hug soft weights</li>
+          <li>cupy zero-copy transfer directly into cuGraph - no host round-trip</li>
+          <li>Supports directional departure constraint from connector orientation</li>
+        </ul>
+      </div>
+
+      <div class="comp-card cugraph">
+        <div class="comp-card-header">
+          <div class="comp-name">cuGraph SSSP</div>
+          <span class="badge gpu">GPU</span>
+        </div>
+        <div class="comp-role">Dijkstra shortest-path on the heading-expanded directed graph</div>
+        <ul class="comp-bullets">
+          <li>~270ms per wire on a typical automotive scene (A100 class GPU)</li>
+          <li>Handles millions of nodes; heading expansion enables in-plane curvature control</li>
+          <li>Automatic CPU fallback via scipy when no NVIDIA GPU is available</li>
+          <li>Path decoded back to 3D cell centers for downstream smoothing</li>
+        </ul>
+      </div>
+
+      <div class="comp-card smooth">
+        <div class="comp-card-header">
+          <div class="comp-name">Fibre-Neutre Smoothing</div>
+          <span class="badge cpu">CPU</span>
+        </div>
+        <div class="comp-role">Global energy minimization for physically valid polylines</div>
+        <ul class="comp-bullets">
+          <li>Least-squares energy: bending stiffness + tension + obstacle repulsion</li>
+          <li>Hard-safe obstacle loop: post-optimization collision re-check and push-off</li>
+          <li>Waypoint pass-through constraints enforced as equality constraints</li>
+          <li>Output polyline respects minimum bend radius for the wire class</li>
+        </ul>
+      </div>
+
+      <div class="comp-card bundle">
+        <div class="comp-card-header">
+          <div class="comp-name">Bundle Router</div>
+          <span class="badge cpu">CPU</span>
+        </div>
+        <div class="comp-role">Groups same-kind wires into shared trunk + branches</div>
+        <ul class="comp-bullets">
+          <li>Two-phase: solve shared trunk first, then route individual branches</li>
+          <li>Combined bundle diameter = √(Σdᵢ²) - physical cross-section packing</li>
+          <li>Trunk clearance inflated to account for combined bundle girth</li>
+          <li>Per-bundle visual style (color, radius) in Omniverse viewport</li>
+        </ul>
+      </div>
+
+      <div class="comp-card constraint">
+        <div class="comp-card-header">
+          <div class="comp-name">Constraint Engine</div>
+          <span class="badge cpu">CPU</span>
+        </div>
+        <div class="comp-role">Hard and soft constraint management for routing decisions</div>
+        <ul class="comp-bullets">
+          <li><strong>Hard:</strong> collision-free, clearance band, thermal melt temperature, waypoints</li>
+          <li><strong>Soft sliders:</strong> surface hug, bend minimization, thermal avoidance, EM avoidance</li>
+          <li>Wire class library: 14 types with diameter, bend radius, and temperature limit</li>
+          <li>Design-space zones: include / exclude regions defined from USD primitives</li>
+        </ul>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+
+<!-- ══════════════════════════════════════════
+     DATA FLOW
+══════════════════════════════════════════ -->
+<section class="dataflow-section">
+  <div class="section-inner">
+    <div class="section-label" style="--nvidia-green:#76b900; color: var(--nvidia-green);">Pipeline</div>
+    <h2 class="section-title light">End-to-End Routing Pipeline</h2>
+    <p class="section-desc light" style="margin-bottom: 52px;">Eight deterministic steps from raw USD stage to fully authored BasisCurves tubes - each step traceable and debuggable independently.</p>
+
+    <div class="steps-flow">
+
+      <div class="step-row">
+        <div class="step-number-col">
+          <div class="step-num-circle">01</div>
+          <div class="step-line"></div>
+        </div>
+        <div class="step-content">
+          <div class="step-title">
+            Load USD Stage
+            <span class="badge cpu" style="font-size:9px; padding:2px 7px;">KIT</span>
+          </div>
+          <div class="step-detail">Omniverse Kit extension traverses the active USD stage, extracting all mesh prims flagged as obstacles or design-space zones.</div>
+        </div>
+      </div>
+
+      <div class="step-row">
+        <div class="step-number-col">
+          <div class="step-num-circle">02</div>
+          <div class="step-line"></div>
+        </div>
+        <div class="step-content">
+          <div class="step-title">
+            Warp Voxelize
+            <span class="badge gpu" style="font-size:9px; padding:2px 7px;">GPU</span>
+          </div>
+          <div class="step-detail">scene_ops feeds mesh triangles into the Warp kernel. Winding-number test classifies each voxel as free / solid / margin. Thermal and EM scalar fields are baked in parallel. Result: 3-channel GridStack tensor.</div>
+        </div>
+      </div>
+
+      <div class="step-row">
+        <div class="step-number-col">
+          <div class="step-num-circle">03</div>
+          <div class="step-line"></div>
+        </div>
+        <div class="step-content">
+          <div class="step-title">Save GridStack → /dev/shm</div>
+          <div class="step-detail">The GridStack numpy array is written to /dev/shm (shared tmpfs). Zero-copy memory-mapped by the solver container - no serialization overhead.</div>
+        </div>
+      </div>
+
+      <div class="step-row">
+        <div class="step-number-col">
+          <div class="step-num-circle">04</div>
+          <div class="step-line"></div>
+        </div>
+        <div class="step-content">
+          <div class="step-title">HTTP POST /solve_all</div>
+          <div class="step-detail">RouterSession serializes all wire specs (start/end points, class, constraints, soft weights) as JSON and POSTs to the FastAPI solver container endpoint.</div>
+        </div>
+      </div>
+
+      <div class="step-row">
+        <div class="step-number-col">
+          <div class="step-num-circle">05</div>
+          <div class="step-line"></div>
+        </div>
+        <div class="step-content">
+          <div class="step-title">
+            Build Heading-Expanded Graph
+            <span class="badge gpu" style="font-size:9px; padding:2px 7px;">GPU</span>
+          </div>
+          <div class="step-detail">Lattice Builder expands the occupancy grid into a (cell × heading) directed graph on GPU via cupy. Edge weights encode all soft constraint costs. Zero-copy hand-off to cuGraph.</div>
+        </div>
+      </div>
+
+      <div class="step-row">
+        <div class="step-number-col">
+          <div class="step-num-circle">06</div>
+          <div class="step-line"></div>
+        </div>
+        <div class="step-content">
+          <div class="step-title">
+            cuGraph SSSP - Dijkstra
+            <span class="badge gpu" style="font-size:9px; padding:2px 7px;">GPU</span>
+          </div>
+          <div class="step-detail">cuGraph runs Dijkstra on the heading-expanded graph (~270ms per wire). Path decoded back to 3D voxel-center coordinates. If GPU unavailable, scipy.sparse Dijkstra is the automatic fallback.</div>
+        </div>
+      </div>
+
+      <div class="step-row">
+        <div class="step-number-col">
+          <div class="step-num-circle">07</div>
+          <div class="step-line"></div>
+        </div>
+        <div class="step-content">
+          <div class="step-title">Fibre-Neutre Smoothing</div>
+          <div class="step-detail">Least-squares global minimization converts the voxel-staircase path to a smooth polyline. Hard-safe obstacle loop post-checks and pushes waypoints off geometry. Waypoint pass-through constraints enforced exactly.</div>
+        </div>
+      </div>
+
+      <div class="step-row">
+        <div class="step-number-col">
+          <div class="step-num-circle">08</div>
+          <!-- No line after last step -->
+        </div>
+        <div class="step-content">
+          <div class="step-title">
+            Author BasisCurves Tubes in USD
+            <span class="badge cpu" style="font-size:9px; padding:2px 7px;">KIT</span>
+          </div>
+          <div class="step-detail">scene_ops writes BasisCurves prims with per-wire radii, material assignments, and optional bundle grouping. Debug overlay prims optionally authored alongside production geometry.</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<div class="section-divider"></div>
+
+
+<!-- ══════════════════════════════════════════
+     TECHNICAL REQUIREMENTS
+══════════════════════════════════════════ -->
+<section class="reqs-section">
+  <div class="section-inner">
+    <div class="section-label">Prerequisites</div>
+    <h2 class="section-title">Technical Requirements</h2>
+    <p class="section-desc">PipeRouter targets GPU-equipped workstations with the NVIDIA Container Toolkit. A CPU-only fallback is available for the solver (scipy), but the Warp voxelizer requires CUDA.</p>
+
+    <table class="reqs-table">
+      <thead>
+        <tr>
+          <th>Component</th>
+          <th>Requirement</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>NVIDIA GPU</td>
+          <td>Ampere architecture or newer (A100, RTX 3080+, RTX 4090) for cuGraph and Warp <span class="req-tag">REQUIRED</span></td>
+        </tr>
+        <tr>
+          <td>CUDA Toolkit</td>
+          <td>CUDA 12.x with matching NVIDIA driver. Tested on CUDA 12.4 and 12.6.</td>
+        </tr>
+        <tr>
+          <td>Omniverse Kit</td>
+          <td>Kit SDK 110.x - extension loaded via <code style="font-family:'IBM Plex Mono',monospace; font-size:12px; background:#f5f5f5; padding:1px 5px; border-radius:3px;">ext_manager</code>. Kit 106 not supported.</td>
+        </tr>
+        <tr>
+          <td>Docker</td>
+          <td>Docker Engine 24+ with NVIDIA Container Toolkit (nvidia-docker2). GPU passthrough required for the solver container. <span class="req-tag">REQUIRED</span></td>
+        </tr>
+        <tr>
+          <td>Python</td>
+          <td>Python 3.12 inside the solver container. Kit extension uses Kit's bundled Python 3.11.</td>
+        </tr>
+        <tr>
+          <td>cuGraph</td>
+          <td>RAPIDS cuGraph 24.x - installed in the solver container image via conda-forge.</td>
+        </tr>
+        <tr>
+          <td>Warp</td>
+          <td>NVIDIA Warp 1.x - installed as an Omniverse extension dependency.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<div class="section-divider"></div>
+
+
+<!-- ══════════════════════════════════════════
+     DEBUG CAPABILITIES
+══════════════════════════════════════════ -->
+<section class="debug-section">
+  <div class="section-inner">
+    <div class="section-label">Observability</div>
+    <h2 class="section-title">Routing Debug Views</h2>
+    <p class="section-desc">Toggle per-wire debug overlays directly in the Omniverse viewport. Each view mode is authored as USD prims alongside the production geometry and can be inspected in Hydra.</p>
+
+    <div class="debug-grid">
+
+      <div class="debug-card">
+        <div class="debug-icon">
+          <svg viewBox="0 0 20 20" fill="none" stroke="#76b900" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="10" cy="10" r="3"/>
+            <path d="M10 2v3M10 15v3M2 10h3M15 10h3"/>
+            <path d="M4.22 4.22l2.12 2.12M13.66 13.66l2.12 2.12M4.22 15.78l2.12-2.12M13.66 6.34l2.12-2.12"/>
+          </svg>
+        </div>
+        <h4>Wire Cells</h4>
+        <p>Renders the raw voxel-cell path returned by cuGraph before smoothing. Shows exactly which lattice nodes were chosen.</p>
+        <span class="debug-tag">debug_wire_cells</span>
+      </div>
+
+      <div class="debug-card">
+        <div class="debug-icon">
+          <svg viewBox="0 0 20 20" fill="none" stroke="#76b900" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 14l4-8 4 6 3-4 3 6"/>
+            <path d="M3 14l4-8" stroke-dasharray="3,2" opacity="0.4"/>
+          </svg>
+        </div>
+        <h4>Grid vs Smooth</h4>
+        <p>Side-by-side overlay of the staircase grid path and the fibre-neutre smoothed polyline, colour-coded to show deviation.</p>
+        <span class="debug-tag">debug_grid_vs_smooth</span>
+      </div>
+
+      <div class="debug-card">
+        <div class="debug-icon">
+          <svg viewBox="0 0 20 20" fill="none" stroke="#76b900" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="2" y="2" width="16" height="16" rx="2"/>
+            <path d="M2 8h16M2 14h16M8 2v16M14 2v16"/>
+            <rect x="5" y="5" width="3" height="3" fill="rgba(255,152,0,0.5)" stroke="none"/>
+            <rect x="12" y="11" width="3" height="3" fill="rgba(233,30,99,0.5)" stroke="none"/>
+          </svg>
+        </div>
+        <h4>Soft-Cost Terrain</h4>
+        <p>Heatmap volume rendering of the accumulated soft-cost field (thermal + EM + surface-hug) that Dijkstra optimised against.</p>
+        <span class="debug-tag">debug_cost_terrain</span>
+      </div>
+
+      <div class="debug-card">
+        <div class="debug-icon">
+          <svg viewBox="0 0 20 20" fill="none" stroke="#76b900" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 16c0-4 4-6 6-10"/>
+            <path d="M10 6c2 4 6 6 6 10"/>
+            <circle cx="10" cy="16" r="2" fill="rgba(233,30,99,0.3)"/>
+            <circle cx="7" cy="10" r="1.5" fill="rgba(255,152,0,0.3)"/>
+            <circle cx="13" cy="10" r="1.5" fill="rgba(76,175,80,0.3)"/>
+          </svg>
+        </div>
+        <h4>Bend-Radius Heatmap</h4>
+        <p>Per-segment curvature visualisation. Highlights any segment where the local bend radius violates the wire class minimum - shown in red.</p>
+        <span class="debug-tag">debug_bend_radius</span>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+
+<!-- ══════════════════════════════════════════
+     FOOTER
+══════════════════════════════════════════ -->
+<footer class="footer">
+  <div class="footer-inner">
+    <span class="footer-logo">NVIDIA</span>
+    <span class="footer-copy">© 2026 NVIDIA Corporation. All rights reserved.</span>
+    <span class="footer-tag">Part of the NVIDIA Omniverse Ecosystem</span>
+  </div>
+</footer>
+
+</body>
+</html>

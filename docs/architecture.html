@@ -1,0 +1,667 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PipeRouter - Architecture</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #0f1117;
+    font-family: system-ui, -apple-system, 'Inter', sans-serif;
+    min-width: 1640px;
+    padding: 32px 36px 40px;
+    color: #d4dff5;
+  }
+
+  /* ── Header ─────────────────────────────────────────────────── */
+  header {
+    display: flex;
+    align-items: baseline;
+    gap: 18px;
+    margin-bottom: 28px;
+  }
+  header h1 {
+    font-size: 20px;
+    font-weight: 700;
+    letter-spacing: .06em;
+    color: #e8eeff;
+  }
+  header span {
+    font-size: 12px;
+    color: #5a6880;
+    letter-spacing: .04em;
+  }
+
+  /* ── Three-column grid ───────────────────────────────────────── */
+  .diagram {
+    display: grid;
+    grid-template-columns: 1fr 144px 1fr;
+    gap: 0;
+    align-items: stretch;
+    position: relative;
+  }
+
+  /* ── Zone panels ─────────────────────────────────────────────── */
+  .zone {
+    border-radius: 16px;
+    padding: 20px;
+    position: relative;
+  }
+  .zone-kit {
+    background: #111827;
+    border: 1.5px solid #1e3058;
+  }
+  .zone-bridge {
+    background: transparent;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0;
+    padding: 0 12px;
+    position: relative;
+  }
+  .zone-solver {
+    background: #0d1a12;
+    border: 1.5px solid #1a3a22;
+  }
+
+  .zone-label {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    margin-bottom: 16px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid rgba(255,255,255,.06);
+  }
+  .kit-label   { color: #4a80cc; }
+  .solver-label { color: #3aaa60; }
+
+  .zone-sublabel {
+    font-size: 10px;
+    color: #3a5070;
+    margin-top: -12px;
+    margin-bottom: 16px;
+  }
+
+  /* ── Component cards ─────────────────────────────────────────── */
+  .card {
+    border-radius: 10px;
+    padding: 13px 15px 12px;
+    margin-bottom: 12px;
+    position: relative;
+  }
+  .card-title {
+    font-size: 13px;
+    font-weight: 700;
+    line-height: 1.2;
+    margin-bottom: 3px;
+  }
+  .card-sub {
+    font-size: 10px;
+    opacity: .6;
+    line-height: 1.4;
+  }
+
+  /* CPU card */
+  .cpu {
+    background: #0d1f1a;
+    border: 1.5px solid #1f4a36;
+    box-shadow: 0 0 0 0 transparent;
+  }
+  .cpu .card-title { color: #4dd9a0; }
+
+  /* GPU card */
+  .gpu {
+    background: #1a1020;
+    border: 1.5px solid #5a2e90;
+    box-shadow: 0 0 14px -4px rgba(160,80,255,.25);
+  }
+  .gpu .card-title { color: #c07aff; }
+
+  /* Neutral card */
+  .neutral {
+    background: #131929;
+    border: 1.5px solid #1e3060;
+  }
+  .neutral .card-title { color: #7aaae8; }
+
+  /* ── Panel card with tabs ─────────────────────────────────────── */
+  .panel-card {
+    background: #101828;
+    border: 1.5px solid #1e3060;
+    border-radius: 10px;
+    padding: 13px 15px 10px;
+    margin-bottom: 12px;
+  }
+  .panel-card .card-title { color: #7aaae8; font-size: 13px; font-weight: 700; }
+  .panel-card .card-sub   { font-size: 10px; opacity: .5; margin-bottom: 9px; }
+  .tabs {
+    display: flex;
+    gap: 5px;
+    flex-wrap: wrap;
+  }
+  .tab {
+    font-size: 9.5px;
+    font-weight: 600;
+    padding: 3px 9px;
+    border-radius: 4px;
+    background: #1a2a44;
+    border: 1px solid #2a4070;
+    color: #8aabdd;
+    letter-spacing: .03em;
+  }
+
+  /* ── Wire/Bundle mini-model ──────────────────────────────────── */
+  .model-box {
+    background: #0f1520;
+    border: 1px solid #1c2e4a;
+    border-radius: 8px;
+    padding: 10px 12px;
+    margin-bottom: 12px;
+    font-size: 9.5px;
+    color: #6a8ab0;
+    line-height: 1.7;
+  }
+  .model-box strong {
+    color: #8aabdd;
+    font-weight: 700;
+    font-size: 10px;
+  }
+  .model-row {
+    display: flex;
+    gap: 12px;
+  }
+  .model-col { flex: 1; }
+
+  /* ── Bridge / /dev/shm pill ──────────────────────────────────── */
+  .shm-pill {
+    background: #13102a;
+    border: 1.5px dashed #6040b0;
+    border-radius: 14px;
+    padding: 16px 14px;
+    width: 100%;
+    text-align: center;
+    position: relative;
+  }
+  .shm-title {
+    font-size: 11px;
+    font-weight: 700;
+    color: #a070ff;
+    letter-spacing: .06em;
+    margin-bottom: 10px;
+  }
+  .shm-file {
+    font-size: 10px;
+    font-weight: 700;
+    color: #c09aff;
+    margin-bottom: 8px;
+    letter-spacing: .04em;
+  }
+  .shm-item {
+    font-size: 9.5px;
+    color: #7050b8;
+    line-height: 1.8;
+    display: block;
+  }
+
+  .bridge-arrow {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+    margin: 8px 0;
+  }
+  .bridge-arrow .arr-label {
+    font-size: 8.5px;
+    color: #7050b8;
+    letter-spacing: .04em;
+  }
+  .bridge-arrow svg { display: block; }
+
+  /* ── Two-column inside solver / kit ──────────────────────────── */
+  .two-col {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+
+  /* ── Inset section header ─────────────────────────────────────── */
+  .section-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    padding: 3px 9px;
+    border-radius: 4px;
+    margin-bottom: 8px;
+    margin-top: 4px;
+  }
+  .section-tag.gpu-tag {
+    background: #230e3a;
+    border: 1px solid #5a2e90;
+    color: #b060f0;
+  }
+  .section-tag.cpu-tag {
+    background: #0a1f14;
+    border: 1px solid #1f4a36;
+    color: #40cc80;
+  }
+
+  /* ── Flow strip ──────────────────────────────────────────────── */
+  .flow-strip {
+    margin-top: 24px;
+    background: #0d1220;
+    border: 1px solid #1a2848;
+    border-radius: 12px;
+    padding: 16px 24px;
+    display: flex;
+    align-items: center;
+    gap: 0;
+    overflow: hidden;
+  }
+  .flow-node {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+  }
+  .flow-pill {
+    font-size: 10px;
+    font-weight: 700;
+    padding: 5px 12px;
+    border-radius: 20px;
+    white-space: nowrap;
+    letter-spacing: .03em;
+  }
+  .flow-label {
+    font-size: 8px;
+    color: #3a5070;
+    letter-spacing: .05em;
+    text-transform: uppercase;
+  }
+  .flow-arrow {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    min-width: 40px;
+  }
+  .flow-arrow-line {
+    height: 1.5px;
+    width: 100%;
+    position: relative;
+  }
+  .flow-arrow-line::after {
+    content: '';
+    position: absolute;
+    right: -1px;
+    top: -3.5px;
+    border: 4px solid transparent;
+  }
+  .fa-blue .flow-arrow-line  { background: #2a6aee; }
+  .fa-blue .flow-arrow-line::after { border-left-color: #2a6aee; }
+  .fa-purple .flow-arrow-line { background: #7a44cc; }
+  .fa-purple .flow-arrow-line::after { border-left-color: #7a44cc; }
+  .fa-green .flow-arrow-line  { background: #2aaa66; }
+  .fa-green .flow-arrow-line::after { border-left-color: #2aaa66; }
+  .fa-orange .flow-arrow-line { background: #cc7030; }
+  .fa-orange .flow-arrow-line::after { border-left-color: #cc7030; }
+  .flow-arrow-tag {
+    font-size: 8px;
+    white-space: nowrap;
+  }
+
+  /* flow pill colours */
+  .fp-blue    { background: #0e2048; border: 1.5px solid #2a5aaa; color: #7abaff; }
+  .fp-orange  { background: #2a1408; border: 1.5px solid #9a4a10; color: #ffaa55; box-shadow: 0 0 10px -3px rgba(255,130,40,.35); }
+  .fp-purple  { background: #1a0e30; border: 1.5px solid #6040b0; color: #b080ff; }
+  .fp-green   { background: #082014; border: 1.5px solid #20703a; color: #40cc80; }
+  .fp-teal    { background: #041e1a; border: 1.5px solid #1a5a52; color: #38c4b0; }
+
+  /* ── Legend ──────────────────────────────────────────────────── */
+  .legend {
+    display: flex;
+    gap: 20px;
+    flex-wrap: wrap;
+    margin-top: 16px;
+    justify-content: flex-end;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 10px;
+    color: #4a6080;
+  }
+  .l-pill {
+    width: 32px;
+    height: 13px;
+    border-radius: 6px;
+    flex-shrink: 0;
+  }
+  .l-line {
+    width: 28px;
+    height: 2px;
+    flex-shrink: 0;
+    border-radius: 1px;
+  }
+  .l-dashed {
+    width: 28px;
+    height: 0;
+    border-top: 2px dashed;
+    flex-shrink: 0;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>PipeRouter - System Architecture</h1>
+  <span>omni.piperouter · Isaac Sim / USD Composer → GPU Solver Container</span>
+</header>
+
+<div class="diagram">
+
+  <!-- ════════════════════════════════════════
+       LEFT: OMNIVERSE KIT EXTENSION
+  ════════════════════════════════════════ -->
+  <div class="zone zone-kit">
+    <div class="zone-label kit-label">Omniverse Kit Extension &nbsp;·&nbsp; omni.piperouter</div>
+    <div class="zone-sublabel" style="margin-top:-12px;margin-bottom:16px;font-size:10px;color:#2a4060;">Isaac Sim / USD Composer - host process</div>
+
+    <!-- Panel -->
+    <div class="panel-card">
+      <div class="card-title">Panel</div>
+      <div class="card-sub" style="margin-bottom:9px;">panel.py &nbsp;·&nbsp; omni.ui</div>
+      <div class="tabs">
+        <div class="tab">Route</div>
+        <div class="tab">Inspect</div>
+        <div class="tab">Tags</div>
+        <div class="tab">Views</div>
+        <div class="tab">Output</div>
+      </div>
+    </div>
+
+    <!-- Router Session -->
+    <div class="card neutral" style="margin-bottom:12px;">
+      <div class="card-title">RouterSession</div>
+      <div class="card-sub">router_session.py &nbsp;·&nbsp; orchestration<br>route_all · voxelize_scene · SolverClient</div>
+    </div>
+
+    <!-- Wire & Bundle model -->
+    <div class="model-box">
+      <div class="model-row">
+        <div class="model-col">
+          <strong>wire</strong><br>
+          polyline · cells<br>
+          raw_poly · weights
+        </div>
+        <div class="model-col">
+          <strong>bundle</strong><br>
+          members[] · trunk_poly<br>
+          weights · type_id
+        </div>
+      </div>
+    </div>
+
+    <!-- GPU: Warp Voxelizer -->
+    <div class="section-tag gpu-tag">
+      <svg width="8" height="8" viewBox="0 0 8 8"><circle cx="4" cy="4" r="3.5" fill="#b060f0" opacity=".7"/></svg>
+      GPU &nbsp;·&nbsp; Warp
+    </div>
+    <div class="card gpu">
+      <div class="card-title">Warp Voxelizer</div>
+      <div class="card-sub">voxelizer.py &nbsp;·&nbsp; winding-number sign test<br>occupancy uint8 &nbsp;·&nbsp; surface_dist float32</div>
+    </div>
+
+    <!-- CPU: Fields + scene_ops -->
+    <div class="section-tag cpu-tag">
+      <svg width="8" height="8" viewBox="0 0 8 8"><circle cx="4" cy="4" r="3.5" fill="#40cc80" opacity=".7"/></svg>
+      CPU &nbsp;·&nbsp; NumPy
+    </div>
+    <div class="two-col">
+      <div class="card cpu">
+        <div class="card-title">Fields</div>
+        <div class="card-sub">thermal &nbsp;·&nbsp; EM<br>tag splat · melt mask</div>
+      </div>
+      <div class="card cpu">
+        <div class="card-title">scene_ops</div>
+        <div class="card-sub">USD I/O · author_tube<br>BasisCurves</div>
+      </div>
+    </div>
+  </div><!-- /zone-kit -->
+
+
+  <!-- ════════════════════════════════════════
+       MIDDLE: /dev/shm BRIDGE
+  ════════════════════════════════════════ -->
+  <div class="zone zone-bridge">
+
+    <!-- Down arrow: save -->
+    <div class="bridge-arrow" style="margin-bottom:0;">
+      <svg width="14" height="28" viewBox="0 0 14 28">
+        <line x1="7" y1="0" x2="7" y2="20" stroke="#7040c0" stroke-width="1.5"/>
+        <polygon points="0,18 7,28 14,18" fill="#7040c0"/>
+      </svg>
+      <span class="arr-label">save stack.npz</span>
+    </div>
+
+    <!-- Shared memory pill -->
+    <div class="shm-pill">
+      <div class="shm-title">/dev/shm</div>
+      <div class="shm-file">stack.npz</div>
+      <span class="shm-item">occupancy</span>
+      <span class="shm-item">surface_dist</span>
+      <span class="shm-item">thermal</span>
+      <span class="shm-item">EM</span>
+    </div>
+
+    <!-- Up arrow: load -->
+    <div class="bridge-arrow" style="margin-top:0;">
+      <span class="arr-label">load GridStack</span>
+      <svg width="14" height="28" viewBox="0 0 14 28">
+        <line x1="7" y1="28" x2="7" y2="8" stroke="#7040c0" stroke-width="1.5"/>
+        <polygon points="0,10 7,0 14,10" fill="#7040c0"/>
+      </svg>
+    </div>
+
+    <!-- HTTP bidirectional arrow in middle -->
+    <div style="display:flex;flex-direction:column;align-items:center;gap:4px;margin-top:14px;">
+      <svg width="44" height="50" viewBox="0 0 44 50">
+        <!-- down arrow (request) -->
+        <line x1="30" y1="2" x2="30" y2="36" stroke="#2a6aee" stroke-width="1.5"/>
+        <polygon points="23,34 30,44 37,34" fill="#2a6aee"/>
+        <!-- up arrow (response) -->
+        <line x1="14" y1="48" x2="14" y2="14" stroke="#cc7030" stroke-width="1.5"/>
+        <polygon points="7,16 14,6 21,16" fill="#cc7030"/>
+      </svg>
+      <span class="arr-label" style="color:#2a6aee;">HTTP /solve_all</span>
+      <span class="arr-label" style="color:#cc7030;margin-top:2px;">polyline JSON</span>
+    </div>
+
+  </div><!-- /zone-bridge -->
+
+
+  <!-- ════════════════════════════════════════
+       RIGHT: SOLVER CONTAINER
+  ════════════════════════════════════════ -->
+  <div class="zone zone-solver">
+    <div class="zone-label solver-label">Solver Container &nbsp;·&nbsp; Docker / GPU Workstation</div>
+    <div class="zone-sublabel" style="margin-top:-12px;margin-bottom:16px;font-size:10px;color:#1a4028;">piperouter-solver &nbsp;·&nbsp; localhost:8000 &nbsp;·&nbsp; NVIDIA GPU required</div>
+
+    <!-- FastAPI -->
+    <div class="card neutral" style="border-color:#1e4040;">
+      <div class="card-title" style="color:#5abcbc;">FastAPI &nbsp;<span style="font-size:10px;font-weight:400;color:#3a7070;">uvicorn :8000</span></div>
+      <div class="card-sub">POST /solve_all &nbsp;·&nbsp; GET /wire_types &nbsp;·&nbsp; GET /health</div>
+    </div>
+
+    <!-- GPU section -->
+    <div class="section-tag gpu-tag">
+      <svg width="8" height="8" viewBox="0 0 8 8"><circle cx="4" cy="4" r="3.5" fill="#b060f0" opacity=".7"/></svg>
+      GPU &nbsp;·&nbsp; cupy / cuGraph
+    </div>
+
+    <div class="two-col" style="margin-bottom:12px;">
+      <div class="card gpu">
+        <div class="card-title">Lattice Edge Build</div>
+        <div class="card-sub">lattice.py · expanded cell×heading<br>26/18/6 connectivity · soft costs</div>
+      </div>
+      <div class="card gpu">
+        <div class="card-title">cuGraph SSSP</div>
+        <div class="card-sub">backend.py · GPU Dijkstra<br>cudf edge list · zero-copy</div>
+      </div>
+    </div>
+
+    <!-- CPU section -->
+    <div class="section-tag cpu-tag">
+      <svg width="8" height="8" viewBox="0 0 8 8"><circle cx="4" cy="4" r="3.5" fill="#40cc80" opacity=".7"/></svg>
+      CPU &nbsp;·&nbsp; scipy / NumPy
+    </div>
+
+    <div class="two-col">
+      <div class="card cpu">
+        <div class="card-title">Smoothing</div>
+        <div class="card-sub">smoothing.py · fibre-neutre<br>LS energy · hard-safe loop</div>
+      </div>
+      <div class="card cpu">
+        <div class="card-title">diagnose_no_path</div>
+        <div class="card-sub">lattice.py · reason classifier<br>thermal · geometry · heading</div>
+      </div>
+    </div>
+
+    <!-- Output -->
+    <div class="card neutral" style="margin-top:12px;border-color:#1a3a22;">
+      <div class="card-title" style="color:#40cc80;">Polyline JSON &nbsp;<span style="font-size:10px;font-weight:400;color:#2a6040;">→ RouteResult</span></div>
+      <div class="card-sub">polyline · cells · raw_poly · length_m · status · reason</div>
+    </div>
+
+  </div><!-- /zone-solver -->
+
+</div><!-- /diagram -->
+
+
+<!-- ════════════════════════════════════════
+     FLOW STRIP
+════════════════════════════════════════ -->
+<div class="flow-strip">
+
+  <div class="flow-node">
+    <div class="flow-pill fp-blue">USD Stage</div>
+    <div class="flow-label">input</div>
+  </div>
+
+  <div class="flow-arrow fa-blue">
+    <div class="flow-arrow-line"></div>
+    <div class="flow-arrow-tag" style="color:#2a6aee;">collect meshes</div>
+  </div>
+
+  <div class="flow-node">
+    <div class="flow-pill fp-orange">Voxelize&nbsp;<span style="font-size:8px;opacity:.7;">GPU</span></div>
+    <div class="flow-label">Warp kernel</div>
+  </div>
+
+  <div class="flow-arrow fa-purple">
+    <div class="flow-arrow-line"></div>
+    <div class="flow-arrow-tag" style="color:#7a44cc;">save stack.npz</div>
+  </div>
+
+  <div class="flow-node">
+    <div class="flow-pill fp-purple">/dev/shm</div>
+    <div class="flow-label">shared mem</div>
+  </div>
+
+  <div class="flow-arrow fa-blue">
+    <div class="flow-arrow-line"></div>
+    <div class="flow-arrow-tag" style="color:#2a6aee;">HTTP /solve_all</div>
+  </div>
+
+  <div class="flow-node">
+    <div class="flow-pill fp-orange">Graph Build&nbsp;<span style="font-size:8px;opacity:.7;">GPU</span></div>
+    <div class="flow-label">expand lattice</div>
+  </div>
+
+  <div class="flow-arrow fa-orange">
+    <div class="flow-arrow-line"></div>
+    <div class="flow-arrow-tag" style="color:#cc7030;">edge list</div>
+  </div>
+
+  <div class="flow-node">
+    <div class="flow-pill fp-orange">SSSP&nbsp;<span style="font-size:8px;opacity:.7;">GPU</span></div>
+    <div class="flow-label">cuGraph</div>
+  </div>
+
+  <div class="flow-arrow fa-green">
+    <div class="flow-arrow-line"></div>
+    <div class="flow-arrow-tag" style="color:#2aaa66;">cell path</div>
+  </div>
+
+  <div class="flow-node">
+    <div class="flow-pill fp-teal">Smooth&nbsp;<span style="font-size:8px;opacity:.7;">CPU</span></div>
+    <div class="flow-label">scipy LS</div>
+  </div>
+
+  <div class="flow-arrow fa-orange">
+    <div class="flow-arrow-line"></div>
+    <div class="flow-arrow-tag" style="color:#cc7030;">polyline + cells</div>
+  </div>
+
+  <div class="flow-node">
+    <div class="flow-pill fp-blue">JSON Response</div>
+    <div class="flow-label">RouteResult</div>
+  </div>
+
+  <div class="flow-arrow fa-orange">
+    <div class="flow-arrow-line"></div>
+    <div class="flow-arrow-tag" style="color:#cc7030;">HTTP reply</div>
+  </div>
+
+  <div class="flow-node">
+    <div class="flow-pill fp-blue">author_tube</div>
+    <div class="flow-label">USD BasisCurves</div>
+  </div>
+
+</div><!-- /flow-strip -->
+
+
+<!-- ════════════════════════════════════════
+     LEGEND
+════════════════════════════════════════ -->
+<div class="legend">
+  <div class="legend-item">
+    <div class="l-pill" style="background:#1a1020;border:1.5px solid #5a2e90;box-shadow:0 0 8px -2px rgba(160,80,255,.4);"></div>
+    GPU component
+  </div>
+  <div class="legend-item">
+    <div class="l-pill" style="background:#0d1f1a;border:1.5px solid #1f4a36;"></div>
+    CPU component
+  </div>
+  <div class="legend-item">
+    <div class="l-pill" style="background:#13102a;border:1.5px dashed #6040b0;"></div>
+    Shared memory
+  </div>
+  <div class="legend-item">
+    <div class="l-line" style="background:#2a6aee;"></div>
+    HTTP call
+  </div>
+  <div class="legend-item">
+    <div class="l-dashed" style="border-color:#7040c0;"></div>
+    Shared mem I/O
+  </div>
+  <div class="legend-item">
+    <div class="l-line" style="background:#cc7030;"></div>
+    Result / author USD
+  </div>
+</div>
+
+</body>
+</html>
