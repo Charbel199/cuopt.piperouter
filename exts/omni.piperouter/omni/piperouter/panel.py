@@ -1,12 +1,11 @@
-"""omni.ui panel for the two-phase expert workflow, organized into collapsible
-sections with status feedback, color swatches, and per-wire controls.
+"""omni.ui panel for the two-phase routing workflow.
 
-Phase A: Create sample scene (or add wires) -> Route All. Phase B: select a wire ->
-tune sliders, add waypoints, Re-route just it (others locked as obstacles), Lock.
-Plus thermal/EM tagging, an occupancy overlay, a node-count readout, and BOM export.
+Phase A: create a scene (or add wires), then Route All. Phase B: select a wire, tune
+its sliders, add waypoints, re-route just that wire with the others locked as
+obstacles, then lock it.
 
-Each wire keeps a stable `key` (used for marker prim paths so rename is safe) and an
-editable `name` (the display + route id).
+Each wire keeps a stable `key`, used for marker prim paths so renaming is safe, and an
+editable `name` used as the display label and the route id.
 """
 from __future__ import annotations
 
@@ -27,12 +26,11 @@ from . import headings, help_window, hud as hud_mod, scene_ops, session_io, view
 
 _WEIGHTS = ("surface", "bend", "thermal", "em", "smoothing")
 
-# Selectable routing algorithms (sent to the solver). Index order = ComboBox order.
-# The _ALGOS tuples are the VALUES sent to the solver; the _LABELS are what the combo
-# shows. octree_lattice is the production DEFAULT (~10x faster at high res: the same
-# bend-aware lattice restricted to a corridor band, falling back to the full lattice
-# when the band is too tight). Plain lattice stays selectable as the exhaustive mode -
-# the gold standard when soft costs must be followed exactly. The rest are experimental.
+# Selectable routing algorithms. Index order must match the ComboBox order; the _ALGOS
+# tuples hold the values sent to the solver, the _LABELS hold what the combo shows.
+# octree_lattice is the default: the bend-aware lattice restricted to a corridor band,
+# falling back to the full lattice when the band is too tight. Plain lattice is the
+# exhaustive mode, for when soft costs must be followed exactly.
 _GLOBAL_ALGOS = ("octree_lattice", "lattice", "astar", "fmm", "rrt", "octree", "medial")
 _LOCAL_ALGOS = ("fibre", "none", "trajopt", "elastic_rod")
 _GLOBAL_SPECIAL = {"octree_lattice": "octree_lattice (fast - default)",
@@ -40,7 +38,7 @@ _GLOBAL_SPECIAL = {"octree_lattice": "octree_lattice (fast - default)",
 _GLOBAL_LABELS = tuple(_GLOBAL_SPECIAL.get(n, f"{n} (experimental)") for n in _GLOBAL_ALGOS)
 _LOCAL_LABELS = tuple(n if n in ("fibre", "none") else f"{n} (experimental)" for n in _LOCAL_ALGOS)
 
-# Slider help - shown as tooltips so the soft constraints are self-explanatory.
+# Slider help, shown as tooltips.
 _WEIGHT_HELP = {
     "surface": ("Surface hug", "Pull the route toward nearby surfaces so it can be "
                 "clipped down (higher = hug closer; 0 = ignore)."),
@@ -64,8 +62,8 @@ _DOT = {  # status -> ABGR color for the ● status dot
 _PRIMARY = 0xFF2A7DBE
 _OK = 0xFF33CC33
 _BAD = 0xFF3333CC
-_WARN = 0xFF1E96E6         # amber/orange (non-fatal warnings, e.g. relocated endpoint)
-_ACCENT = 0xFF76B900       # NVIDIA green (captions, selection)
+_WARN = 0xFF1E96E6         # amber, for non-fatal warnings such as a relocated endpoint
+_ACCENT = 0xFF76B900       # NVIDIA green, for captions and selection
 _HINT_BG = 0xFF2B2B2B      # empty-state card background
 _DIVIDER = 0xFF333333
 
@@ -93,11 +91,11 @@ class PipeRouterPanel:
         self._api = api
         self._default_url = default_url
         all_types = wire_library.load_wire_library()
-        # wire types (used in the Wires section - kind=="wire" only; pipes not bundled)
+        # Routable types shown in the Wires section.
         self._types = [t for t in all_types if t["kind"] in ("wire", "pipe")]
         self._type_labels = [t["label"] for t in self._types]
         self._type_ids = [t["id"] for t in self._types]
-        # bundle harness types (kind=="bundle") - cost/label for trunk BOM rows
+        # Harness types, used for the cost and label of trunk BOM rows.
         self._bundle_types = [t for t in all_types if t["kind"] == "bundle"]
         self._bundle_type_labels = [t["label"] for t in self._bundle_types]
         self._bundle_type_ids = [t["id"] for t in self._bundle_types]
@@ -112,21 +110,21 @@ class PipeRouterPanel:
         self._need_tags = False
         self._need_bom = False
         self._need_bundles = False
-        self._need_resync = False   # re-sync panel to stage (markers deleted / scene swapped)
+        self._need_resync = False   # re-sync panel to stage after marker deletion or scene swap
         self._bundles = []
         self._bundle_counter = 0
         self._selected_bundle = None   # index into self._bundles, or None
         self._active_debug = None      # (wire_name, mode) of the live per-wire debug view
-        self._checklist_collapsed = {}  # bid -> bool: user-controlled collapsed state
+        self._checklist_collapsed = {}  # bid -> collapsed?, driven by the user
         self._vp_labels = viewport_labels.ViewportOrderLabels()
         self._hud = hud_mod.ViewportHUD()
-        # double-click on the selected wire's tube -> drop a waypoint there
+        # Double-click on the selected wire's tube drops a waypoint there.
         self._picker = viewport_pick.ViewportPicker(on_pick=self._on_viewport_pick)
         self._hud_visible = True
         self._help = help_window.HelpWindow()
         self._window = ui.Window("PipeRouter", width=520, height=780)
         self._build()
-        # tutorial opens once on enable (unless the user unticked "show on startup")
+        # The tutorial opens once on enable, unless the user unticked "show on startup".
         if self._help.show_on_startup():
             self._help.show()
 
@@ -167,8 +165,8 @@ class PipeRouterPanel:
         self._register_stage_listener()
 
     def _register_stage_listener(self):
-        """Watch the stage so the tagged-prims list updates when the scene changes
-        (e.g. an object is deleted) - not just when we tag from the panel."""
+        """Watch the stage so the tagged-prims list tracks changes made outside the panel,
+        such as an object being deleted in the viewport."""
         try:
             if self._obj_listener is not None:
                 self._obj_listener.Revoke()
@@ -184,16 +182,16 @@ class PipeRouterPanel:
             pass
 
     def _on_objects_changed(self, notice, sender):
-        # coalesced (one rebuild next frame); rebuilding only reads the stage, so it
-        # cannot re-trigger this notice. resync drops wires/bundles whose markers the
+        # Coalesced into one rebuild next frame. The rebuild only reads the stage, so it
+        # cannot re-trigger this notice. resync drops wires and bundles whose markers the
         # user just deleted in the viewport.
         self._schedule(tags=True, resync=True)
 
     def _on_stage_event(self, e):
         if e.type == int(omni.usd.StageEventType.OPENED):
             self._register_stage_listener()   # re-bind to the new stage
-            # a new/different scene invalidates wires tied to the old stage's markers;
-            # resync empties the panel to match (Load re-populates after, with its markers).
+            # A different scene invalidates wires tied to the old stage's markers, so
+            # resync empties the panel to match. Load re-populates it with its own markers.
             self._schedule(tags=True, resync=True)
 
     def _section_views(self):
@@ -210,7 +208,7 @@ class PipeRouterPanel:
                               clicked_fn=lambda: self._api.create_view_camera("yz"))
                 ui.Button("Refresh 2D views", height=_BTN_H,
                           clicked_fn=lambda: self._refresh_views(force=True))
-                # full-width images stacked vertically (much larger than side-by-side)
+                # Full-width images stacked vertically.
                 self._providers = {}
                 for key, label in (("xy", "XY (top)"), ("xz", "XZ (front)"), ("yz", "YZ (side)")):
                     ui.Label(label, height=0, style={"color": 0xFF999999})
@@ -218,7 +216,7 @@ class PipeRouterPanel:
                     self._providers[key] = prov
                     ui.ImageWithProvider(prov, height=300)
 
-    # uniform left-column width so every labelled control lines up in a column
+    # Uniform left-column width so every labelled control lines up.
     _LBL = 130
 
     def _caption(self, text):
@@ -226,8 +224,7 @@ class PipeRouterPanel:
         ui.Label(text, style={"color": _ACCENT, "font_size": 11})
 
     def _hint(self, text):
-        """Subtle rounded empty-state card (matches the help window styling) instead of
-        bare gray text."""
+        """Draw a rounded empty-state card, styled to match the help window."""
         with ui.ZStack(height=0):
             ui.Rectangle(style={"background_color": _HINT_BG, "border_radius": 6})
             with ui.HStack(height=0):
@@ -240,8 +237,8 @@ class PipeRouterPanel:
                 ui.Spacer(width=10)
 
     def _select_bar(self, selected, on_click, tooltip):
-        """A slim vertical bar used as a row's selection indicator: solid green when the
-        row is selected, faint outline otherwise. Reads clearer than the old ">" glyph."""
+        """Draw a row's selection indicator: a slim vertical bar, solid green when the row
+        is selected and a faint outline otherwise."""
         style = ({"background_color": _ACCENT, "border_radius": 2} if selected
                  else {"background_color": 0x00000000, "border_radius": 2,
                        "border_width": 1, "border_color": 0xFF555555})
@@ -251,7 +248,7 @@ class PipeRouterPanel:
     def _section_setup(self):
         with ui.CollapsableFrame("Scene & Setup", collapsed=False):
             with ui.VStack(spacing=6, height=0):
-                # ---- scene actions
+                # Scene actions.
                 self._caption("SCENE")
                 with ui.HStack(height=0, spacing=4):
                     ui.Button("Create sample scene", clicked_fn=self._create_sample,
@@ -276,7 +273,7 @@ class PipeRouterPanel:
                                       "also auto-clears when you open a new scene or delete "
                                       "markers.")
                 ui.Rectangle(height=1, style={"background_color": 0xFF333333})
-                # ---- solver settings
+                # Solver settings.
                 self._caption("SOLVER")
                 with ui.HStack(height=0):
                     ui.Label("Grid resolution", width=self._LBL)
@@ -290,7 +287,7 @@ class PipeRouterPanel:
                                      "Fast(6)=axis-only (blocky, ~4x faster); "
                                      "Balanced(18)=+2D diagonals; Smooth(26)=+3D corners "
                                      "(densest, slowest). Smoothing rounds all of them.")
-                    # index 0/1/2 -> 6/18/26; default Smooth (26)
+                    # Index 0/1/2 maps to 6/18/26 connectivity; default is Smooth (26).
                     self._conn_combo = ui.ComboBox(2, "Fast (6)", "Balanced (18)",
                                                    "Smooth (26)")
                 with ui.HStack(height=0):
@@ -305,10 +302,9 @@ class PipeRouterPanel:
                     ui.Label("Debug overlay", width=self._LBL,
                              tooltip="Visualize the voxel field as a colored point cloud "
                                      "under /World/PipeRouter/debug.")
-                    # None / Occupancy / Thermal / EM
                     self._overlay_combo = ui.ComboBox(0, "None", "Occupancy", "Thermal", "EM")
                     self._overlay_combo.model.add_item_changed_fn(self._on_overlay)
-                # ---- experimental algorithm pickers, tucked away by default
+                # Experimental algorithm pickers, tucked away by default.
                 with ui.CollapsableFrame("Advanced - routing algorithms", collapsed=True):
                     with ui.VStack(spacing=4, height=0):
                         ui.Label("Defaults (octree_lattice + fibre) are recommended. Pick "
@@ -347,15 +343,15 @@ class PipeRouterPanel:
                                      "font_size": 15})
 
     def _section_inspector(self):
-        # collapsed until something is selected (item #4) - _select / _select_bundle expand it
+        # Collapsed until something is selected; _select and _select_bundle expand it.
         self._inspector_frame = ui.CollapsableFrame("Selected wire / bundle", collapsed=True)
         with self._inspector_frame:
             self._inspector = ui.VStack(spacing=4, height=0)
             self._rebuild_inspector()
 
     # -------------------------------------------------------------- bundles
-    _BUNDLE_START_COLOR = (0.9, 0.7, 0.1)   # amber - "bundle start"
-    _BUNDLE_END_COLOR   = (0.9, 0.4, 0.0)   # orange - "bundle end"
+    _BUNDLE_START_COLOR = (0.9, 0.7, 0.1)   # amber, bundle start
+    _BUNDLE_END_COLOR   = (0.9, 0.4, 0.0)   # orange, bundle end
 
     def _section_bundles(self):
         self._bundles_frame = ui.CollapsableFrame("Bundles", collapsed=True)
@@ -372,7 +368,7 @@ class PipeRouterPanel:
             return
         bid = f"b{self._bundle_counter}"
         self._bundle_counter += 1
-        inv = self._stage_inv(stage)  # meters -> stage units (cm/mm/m agnostic)
+        inv = self._stage_inv(stage)  # meters -> stage units, whatever the stage uses
         merge_path = f"{scene_ops.MARKERS_SCOPE}/{bid}_merge"
         split_path = f"{scene_ops.MARKERS_SCOPE}/{bid}_split"
         r = self._marker_radius(stage)   # scene-relative marker size
@@ -413,11 +409,11 @@ class PipeRouterPanel:
             for bi, b in enumerate(self._bundles):
                 status_color = _DOT.get(b["status"], _DOT["unrouted"])
                 is_sel = bi == self._selected_bundle
-                # --- bundle header row (unified style matching wire rows) ---
+                # Bundle header row, styled to match the wire rows.
                 with ui.HStack(height=0, spacing=4):
                     self._select_bar(is_sel, lambda i=bi: self._select_bundle(i),
                                      "Select this bundle")
-                    # gray swatch (fixed bundle color)
+                    # Gray swatch; bundles have no per-bundle color.
                     ui.Rectangle(width=12, height=12,
                                  style={"background_color": 0xFFBBBBBB, "border_radius": 2,
                                         "border_width": 1, "border_color": 0xFF222222})
@@ -431,13 +427,12 @@ class PipeRouterPanel:
                     nm.model.set_value(b["name"])
                     nm.model.add_value_changed_fn(
                         lambda m, i=bi: self._rename_bundle(i, m))
-                    # bundle harness type (cost/label for trunk BOM)
+                    # Harness type; drives the cost and label of the trunk BOM row.
                     if self._bundle_type_labels:
                         tidx = b.get("type_index", 0)
                         btc = ui.ComboBox(tidx, *self._bundle_type_labels)
                         btc.model.add_item_changed_fn(
                             lambda m, e, i=bi: self._set_bundle_type(i, m))
-                    # trunk length + cost when routed
                     tl = b.get("trunk_length_m", 0.0)
                     if b["status"] == "routed" and tl:
                         bt = (self._bundle_types[b.get("type_index", 0)]
@@ -464,11 +459,12 @@ class PipeRouterPanel:
                     ui.Button("X", width=22, height=_MINI_H, tooltip="Delete this bundle",
                               clicked_fn=lambda i=bi: self._delete_bundle(i),
                               style={"color": 0xFFCC6666})
-                # --- collapsible wire checklist ---
+                # Collapsible wire checklist.
                 mem_count = len(b["members"])
                 checklist_label = (f"Wires ({mem_count} selected)"
                                    if mem_count else "Wires (none selected)")
-                # use the user's last-set collapsed state; default open when no members
+                # Honour the user's last collapsed state; default open when there are
+                # no members yet.
                 default_collapsed = self._checklist_collapsed.get(b["id"], mem_count > 0)
                 cf = ui.CollapsableFrame(checklist_label, collapsed=default_collapsed)
                 cf.set_collapsed_changed_fn(
@@ -554,15 +550,15 @@ class PipeRouterPanel:
         if bundle_idx >= len(self._bundles):
             return
         b = self._bundles[bundle_idx]
-        # The user is interacting with the checklist - mark it as open so the
-        # rebuild doesn't collapse it (first-click fix: before any toggle the state
-        # dict has no entry and defaults to collapsed when mem_count goes 0->1).
+        # Pin the checklist open before the rebuild. Without an entry in the state dict
+        # the default is "collapsed once mem_count > 0", so the very first tick would
+        # fold the checklist shut under the user's cursor.
         self._checklist_collapsed[b["id"]] = False
         if wire_name in b["members"]:
             b["members"].remove(wire_name)
         else:
             b["members"].append(wire_name)
-        # Re-aggregate trunk weights from wire members as a starting point
+        # Re-aggregate trunk weights from the members as a starting point.
         members = [w for w in self._wires if w["name"] in b["members"]]
         if members:
             for k in _WEIGHTS:
@@ -570,7 +566,7 @@ class PipeRouterPanel:
         self._schedule(bundles=True, inspector=True)
 
     def _reorder_bundle(self, src, dst):
-        """Move bundle at index src to index dst (up/down order)."""
+        """Move the bundle at index `src` to index `dst`. Order is routing order."""
         n = len(self._bundles)
         if not (0 <= src < n and 0 <= dst < n) or src == dst:
             return
@@ -580,7 +576,7 @@ class PipeRouterPanel:
         self._schedule(bundles=True)
 
     def _select_bundle(self, idx):
-        """Select a bundle for editing in the inspector (clears wire selection)."""
+        """Select a bundle for editing in the inspector. Clears any wire selection."""
         self._selected_bundle = idx
         self._selected = None
         b = self._bundles[idx]
@@ -610,9 +606,9 @@ class PipeRouterPanel:
                 self._tag_stack = ui.VStack(spacing=2, height=0)
                 self._rebuild_tags()
 
-    _TEMP_COLOR = 0xFF4466EE   # warm red-orange (thermal)
-    _EM_COLOR = 0xFFCCAA33     # teal-gold (EM)
-    _CLR_COLOR = 0xFF55CC55    # green (clearance)
+    _TEMP_COLOR = 0xFF4466EE   # warm red-orange
+    _EM_COLOR = 0xFFCCAA33     # teal-gold
+    _CLR_COLOR = 0xFF55CC55    # green
 
     def _rebuild_tags(self):
         if self._window is None:
@@ -629,7 +625,7 @@ class PipeRouterPanel:
                 has_e = t["em"] is not None
                 has_c = t.get("clearance_m") is not None
                 name = t["path"].rsplit("/", 1)[-1]
-                # presence dot: warm if thermal, teal if EM, green if clearance-only
+                # Presence dot: warm if thermal, teal if EM, green if clearance only.
                 dot = (self._TEMP_COLOR if has_t
                        else self._EM_COLOR if has_e else self._CLR_COLOR)
                 with ui.HStack(height=0, spacing=6):
@@ -652,11 +648,11 @@ class PipeRouterPanel:
         self._api.clear_tag(path)
         self._schedule(tags=True)
 
-    # BOM table columns: (title, width_px, numeric?) - numeric columns are right-aligned
-    # and shared by header + rows + totals so everything lines up in a grid.
+    # BOM table columns as (title, width_px, numeric). Numeric columns are right-aligned.
+    # Header, rows and totals all read these widths so the grid lines up.
     _BOM_COLS = (("Wire", 116, False), ("Type", 124, False), ("Length", 66, True),
                  ("Mass", 60, True), ("Cost", 60, True), ("", 16, False))
-    _RIGHT = None  # resolved lazily to ui.Alignment.RIGHT_CENTER (ui may be a stub at import)
+    _RIGHT = None  # resolved lazily to ui.Alignment.RIGHT_CENTER; ui may be a stub at import
 
     def _num_align(self):
         if self._RIGHT is None:
@@ -675,7 +671,7 @@ class PipeRouterPanel:
                     self._bom_path = ui.StringField()
                     self._bom_path.model.set_value("/tmp/piperouter_bom")
                     ui.Button("Export", width=70, height=_BTN_H, clicked_fn=self._on_export)
-                # the table is rebuilt into this container by _rebuild_bom
+                # _rebuild_bom clears and refills this container.
                 self._bom_table = ui.VStack(spacing=2, height=0)
         self._rebuild_bom()
 
@@ -690,12 +686,12 @@ class PipeRouterPanel:
                 self._hint("No routes yet. Add wires and click ROUTE ALL to populate the "
                            "bill of materials.")
                 return
-            # auto-expand the section the first time results appear (item #4)
+            # Auto-expand the section the first time results appear.
             if not getattr(self, "_bom_auto_expanded", False):
                 self._bom_auto_expanded = True
                 if getattr(self, "_output_frame", None) is not None:
                     self._output_frame.collapsed = False
-            # header row
+            # Header row.
             with ui.HStack(height=0, spacing=4):
                 for title, wpx, numeric in self._BOM_COLS:
                     kw = {"alignment": right} if numeric else {}
@@ -719,12 +715,12 @@ class PipeRouterPanel:
                                          ("routed" if routed else "no path"),
                                  style={"background_color": _DOT.get(r["status"], 0xFF888888),
                                         "border_radius": 6})
-                # spell out WHY a wire failed, right under its row
+                # Spell out why a wire failed, right under its row.
                 if not routed and reason:
                     ui.Label(f"   -> {reason}", word_wrap=True,
                              style={"color": _BAD, "font_size": 12})
             ui.Rectangle(height=1, style={"background_color": 0xFF444444})
-            # totals row - aligned to the same column grid as the rows above
+            # Totals row, on the same column grid as the rows above.
             with ui.HStack(height=0, spacing=4):
                 ui.Label(f"TOTAL ({s['n_routed']} routed"
                          + (f", {s['n_no_path']} no-path" if s["n_no_path"] else "") + ")",
@@ -737,7 +733,7 @@ class PipeRouterPanel:
                          style={"font_size": 14, "color": _OK})
 
     def _bom_type_labels(self):
-        """{wire_id -> wire-type label} so the BOM Type column is filled."""
+        """Return {wire_id: wire-type label}, used to fill the BOM Type column."""
         return {w["name"]: self._type_labels[w["type_index"]] for w in self._wires}
 
     # ----------------------------------------------------------- connection
@@ -752,7 +748,7 @@ class PipeRouterPanel:
             self._help.show()
 
     def _refresh_hud(self):
-        """Push current BOM totals + selected-wire weights to the viewport HUD."""
+        """Push the current BOM totals and selected-wire weights to the viewport HUD."""
         if not self._hud_visible:
             return
         s = bom_lib.summarize(self._last_bom, self._bom_type_labels())
@@ -780,10 +776,10 @@ class PipeRouterPanel:
             self._status_dot.set_style({"background_color": _OK, "border_radius": 6})
 
     def _url_value(self):
-        return self._default_url  # URL is fixed for now; Reconnect re-probes it
+        return self._default_url  # the URL is fixed; Reconnect just re-probes it
 
     def _connectivity(self):
-        """6 / 18 / 26 from the Connectivity combo (index 0/1/2); default 26."""
+        """Return 6, 18 or 26 from the Connectivity combo. Defaults to 26."""
         combo = getattr(self, "_conn_combo", None)
         if combo is None:
             return 26
@@ -806,11 +802,11 @@ class PipeRouterPanel:
 
     def _update_readout(self):
         res = max(1, self._res.model.get_value_as_int())
-        # Cells are uniform cubes: cell size = (longest scene axis) / resolution, and
-        # the other axes get however many of those cubes fit. So `res` is the voxel
-        # count along the LONGEST axis; spacing is identical on all three axes.
-        # Prefer the ACTUAL voxel size from the last route (matches the occupancy overlay);
-        # fall back to a pre-route estimate from the scene bounds.
+        # Cells are uniform cubes of (longest scene axis) / resolution; the other axes
+        # get however many of those cubes fit. So `res` counts voxels along the longest
+        # axis and spacing is identical on all three. Prefer the voxel size the last
+        # route actually used, which matches the occupancy overlay, and fall back to an
+        # estimate from the scene bounds before the first route.
         size_txt = ""
         real = None
         try:
@@ -828,9 +824,9 @@ class PipeRouterPanel:
                               f"cells){size_txt}. Higher = finer detail, slower routing.")
 
     # ------------------------------------------------- deferred UI refresh
-    # omni.ui forbids clearing/rebuilding a container from inside an event/draw
-    # callback ("Container::clear was called during an event or draw"). So event
-    # handlers request a refresh and we rebuild on the next frame instead.
+    # omni.ui forbids clearing or rebuilding a container from inside an event or draw
+    # callback; it raises "Container::clear was called during an event or draw". Event
+    # handlers therefore only request a refresh, and the rebuild happens next frame.
     def _schedule(self, wires=False, inspector=False, tags=False, bom=False,
                   bundles=False, resync=False):
         self._need_wires = self._need_wires or wires
@@ -852,7 +848,7 @@ class PipeRouterPanel:
         self._refresh_pending = False
         if self._need_resync:
             self._need_resync = False
-            if self._prune_missing():   # markers vanished -> drop those wires/bundles
+            if self._prune_missing():   # markers vanished, so drop those wires/bundles
                 self._need_wires = self._need_bundles = True
                 self._need_inspector = self._need_bom = True
         if self._need_wires:
@@ -870,15 +866,17 @@ class PipeRouterPanel:
         if self._need_bundles:
             self._need_bundles = False
             self._rebuild_bundles()
-        # viewport order labels + HUD refreshed every coalesced frame
+        # Viewport order labels and HUD refresh on every coalesced frame.
         self._refresh_vp_labels()
         self._refresh_hud()
 
     def _prune_missing(self):
-        """Drop any wire/bundle whose markers no longer exist in the stage - covers the
-        user deleting a marker in the viewport AND opening a new/different scene (where all
-        the old markers are gone, so the panel empties to match). Returns True if anything
-        was removed. Only edits the panel model; it never deletes stage prims."""
+        """Drop any wire or bundle whose markers no longer exist in the stage.
+
+        Covers both a marker deleted in the viewport and a different scene being opened,
+        where every old marker is gone and the panel empties to match. Returns True if
+        anything was removed. Only edits the panel model, never stage prims.
+        """
         stage = self._get_stage()
         if stage is None:
             return False
@@ -907,9 +905,8 @@ class PipeRouterPanel:
         return True
 
     def _on_reset(self):
-        """Clear ALL routing state - wires, bundles, selection - and remove the markers,
-        route tubes and debug geometry PipeRouter authored. Obstacle meshes (the user's
-        scene) are left untouched, so you can immediately start adding wires again."""
+        """Clear every wire, bundle and selection, and remove the markers, route tubes and
+        debug geometry PipeRouter authored. The user's obstacle meshes are left untouched."""
         stage = self._get_stage()
         self._wires = []
         self._bundles = []
@@ -936,8 +933,8 @@ class PipeRouterPanel:
     def _new_wire(self, key, name, type_index=0):
         return {"key": key, "name": name, "type_index": type_index,
                 "weights": {k: 1.0 for k in _WEIGHTS}, "waypoints": [], "wp_counter": 0,
-                # wp_slots[i] = how many of this wire's bundles come BEFORE waypoint i in
-                # the route order (0 = before the first bundle). Parallel to waypoints.
+                # wp_slots[i] = how many of this wire's bundles precede waypoint i in the
+                # route order; 0 means before the first bundle. Parallel to waypoints.
                 "wp_slots": [],
                 "locked": False, "polyline": None, "status": "unrouted",
                 "length_m": 0.0, "cost": 0.0, "combo": None, "name_model": None,
@@ -946,10 +943,13 @@ class PipeRouterPanel:
 
     @staticmethod
     def _stage_inv(stage):
-        """1 / metersPerUnit for the stage, so we can place default markers at a fixed
-        PHYSICAL size (meters) regardless of whether the stage is cm (Omniverse default),
-        mm (CAD imports), or m (our sample scenes). Defaults sized in meters * inv land at
-        the right scale everywhere; the routing pipeline converts back to meters via mpu."""
+        """Return 1 / metersPerUnit for the stage.
+
+        Lets defaults be authored at a fixed physical size in meters whatever the stage
+        unit is: cm for Omniverse, mm for CAD imports, m for the sample scenes. A value
+        in meters times inv lands at the right scale; the routing pipeline converts back
+        to meters using metersPerUnit.
+        """
         try:
             from pxr import UsdGeom
             mpu = float(UsdGeom.GetStageMetersPerUnit(stage))
@@ -958,15 +958,18 @@ class PipeRouterPanel:
             return 1.0
 
     def _scene_diag(self, stage):
-        """Scene bounding-box diagonal in STAGE units. Uses /World's world bound - a single
-        cheap compute (no force-load, no per-mesh loop) so it's fine to call per refresh.
-        Falls back to ~1 m worth of stage units when the scene is empty."""
+        """Return the scene bounding-box diagonal in stage units.
+
+        Uses /World's world bound: one cheap compute, no force-load and no per-mesh loop,
+        so it is safe to call on every refresh. Falls back to roughly 1 m worth of stage
+        units when the scene is empty.
+        """
         try:
             from pxr import Usd, UsdGeom
             bb = UsdGeom.BBoxCache(Usd.TimeCode.Default(),
                                    [UsdGeom.Tokens.default_, UsdGeom.Tokens.render])
-            # prefer /World (our sample scenes); fall back to the asset's defaultPrim
-            # (imported CAD like the engine has no /World), then the whole stage.
+            # Prefer /World, then the asset's defaultPrim since imported CAD often has
+            # no /World, then the whole stage.
             targets = []
             w = stage.GetPrimAtPath("/World")
             if w and w.IsValid():
@@ -987,8 +990,10 @@ class PipeRouterPanel:
         return float(self._stage_inv(stage))   # ~1 m
 
     def _scene_longest_axis_m(self, stage):
-        """Longest scene bbox axis in METRES (stage units * metersPerUnit). Drives the voxel
-        size, since cells are cubes sized = longest_axis / resolution. None if no scene."""
+        """Return the longest scene bbox axis in metres, or None when there is no scene.
+
+        Drives the voxel size, since cells are cubes of longest_axis / resolution.
+        """
         try:
             from pxr import Usd, UsdGeom
             bb = UsdGeom.BBoxCache(Usd.TimeCode.Default(),
@@ -1014,7 +1019,7 @@ class PipeRouterPanel:
 
     @staticmethod
     def _fmt_len_m(m):
-        """Human length: mm under 1 cm, cm under 1 m, else m."""
+        """Format a length in metres for display: mm under 1 cm, cm under 1 m, else m."""
         if m < 0.01:
             return f"{m * 1000.0:.1f} mm"
         if m < 1.0:
@@ -1022,9 +1027,11 @@ class PipeRouterPanel:
         return f"{m:.3f} m"
 
     def _marker_radius(self, stage):
-        """Draggable-marker radius in STAGE units, ~0.4%% of the scene diagonal, clamped to
-        a visible-but-not-huge physical range (5-50 mm). Scales markers to the asset so they
-        neither dwarf a 1 m harness nor vanish on a big bay."""
+        """Return the draggable-marker radius in stage units.
+
+        Roughly 0.4% of the scene diagonal, clamped to 5-50 mm, so markers scale with the
+        asset and neither dwarf a 1 m harness nor vanish in a large engine bay.
+        """
         inv = self._stage_inv(stage)
         return float(min(max(self._scene_diag(stage) * 0.004, 0.005 * inv), 0.05 * inv))
 
@@ -1034,7 +1041,7 @@ class PipeRouterPanel:
             self._progress.text = "open a USD stage first"
             return
         inv = self._stage_inv(stage)  # meters -> stage units, so the wire is ~0.5 m anywhere
-        r = self._marker_radius(stage)   # scene-relative marker size
+        r = self._marker_radius(stage)
         key = f"wire_{self._key_counter}"
         self._key_counter += 1
         scene_ops.spawn_marker(stage, f"{scene_ops.MARKERS_SCOPE}/{key}_start",
@@ -1051,7 +1058,7 @@ class PipeRouterPanel:
         self._apply_scene(self._api.create_complex_scene(), "complex")
 
     def _apply_scene(self, result, label):
-        """Load wire descriptors from a freshly-built scene into the panel."""
+        """Load the wire descriptors from a freshly built scene into the panel."""
         descriptors, err = result
         if err:
             self._progress.text = f"{label} scene: {err}"
@@ -1061,7 +1068,8 @@ class PipeRouterPanel:
         self._key_counter = 0
         for d in descriptors:
             ti = self._type_ids.index(d["type_id"]) if d["type_id"] in self._type_ids else 0
-            # markers were authored by the scene builder under the descriptor name
+            # The scene builder authored the markers under the descriptor name, so the
+            # wire key must match it.
             self._wires.append(self._new_wire(d["name"], d["name"], ti))
             self._key_counter += 1
         self._schedule(wires=True, inspector=True, tags=True)
@@ -1069,9 +1077,12 @@ class PipeRouterPanel:
 
     # ------------------------------------------------------------- save / load
     def _session_state(self):
-        """The full panel session as a JSON-safe dict (geometry/markers/routes live in the
-        stage; this captures the logic). type_id is stored alongside type_index so wire
-        types survive even if the library order changes."""
+        """Return the panel session as a JSON-safe dict.
+
+        Geometry, markers and routes live in the stage; this captures only the panel
+        state. type_id is stored alongside type_index so wire types survive a change in
+        the wire library's order.
+        """
         settings = {
             "resolution": self._res.model.get_value_as_int(),
             "connectivity_idx": int(
@@ -1092,8 +1103,10 @@ class PipeRouterPanel:
         return session_io.serialize(wires, self._bundles, settings, counters)
 
     def _apply_session(self, data):
-        """Rebuild the panel from a saved session dict (markers/geometry already restored
-        by opening the stage)."""
+        """Rebuild the panel from a saved session dict.
+
+        Markers and geometry are already restored by opening the stage.
+        """
         wires, bundles, settings, counters = session_io.deserialize(data)
 
         self._wires = []
@@ -1132,9 +1145,9 @@ class PipeRouterPanel:
         self._conn_combo.model.get_item_value_model().set_value(
             int(settings.get("connectivity_idx", 2)))   # default Smooth (26)
         self._clearance.model.set_value(float(settings.get("clearance", 0.0)))
-        # Legacy migration: pre-v2 sessions saved "lattice" because it was the OLD
-        # default, not a deliberate choice - bring them onto the new octree_lattice
-        # default. Sessions saved at v2+ with "lattice" chose it and are respected.
+        # In v1 sessions "lattice" was the default value rather than a deliberate choice,
+        # so migrate those onto octree_lattice. From v2 on, "lattice" was picked by the
+        # user and is respected.
         if int(data.get("version", 1)) < 2 and settings.get("global_algo") == "lattice":
             settings["global_algo"] = "octree_lattice"
         if settings.get("global_algo") in _GLOBAL_ALGOS:
@@ -1144,7 +1157,7 @@ class PipeRouterPanel:
             self._local_combo.model.get_item_value_model().set_value(
                 _LOCAL_ALGOS.index(settings["local_algo"]))
 
-        # rebuild the BOM aggregate from the restored routed wires + bundle trunks
+        # Rebuild the BOM aggregate from the restored routed wires and bundle trunks.
         self._last_bom = []
         for w in self._wires:
             if w.get("status") == "routed":
@@ -1158,9 +1171,9 @@ class PipeRouterPanel:
                 })
 
         self._schedule(wires=True, bundles=True, inspector=True, bom=True, tags=True)
-        # We just authoritatively set the model from the loaded file - cancel any resync
-        # queued by the stage-OPENED event so it can't prune the fresh wires while the
-        # stage is still composing.
+        # The model has just been set authoritatively from the loaded file, so cancel any
+        # resync queued by the stage OPENED event. Otherwise it prunes the fresh wires
+        # while the stage is still composing.
         self._need_resync = False
         self._refresh_views()
         self._refresh_overlay()
@@ -1168,7 +1181,7 @@ class PipeRouterPanel:
         self._refresh_vp_labels()
 
     def _pick_file(self, title, apply_label, exts, handler):
-        """Open the native Omniverse file dialog and call handler(full_path)."""
+        """Open the native Omniverse file dialog and call `handler(full_path)`."""
         try:
             from omni.kit.window.filepicker import FilePickerDialog
 
@@ -1187,7 +1200,7 @@ class PipeRouterPanel:
                     click_apply_handler=_apply, file_extension_options=exts,
                 )
             except TypeError:
-                # older/newer Kit builds vary on this kwarg - fall back without it
+                # Kit builds vary on whether this kwarg exists; retry without it.
                 dialog = FilePickerDialog(
                     title, apply_button_label=apply_label, click_apply_handler=_apply,
                 )
@@ -1231,10 +1244,11 @@ class PipeRouterPanel:
 
     @staticmethod
     def _strip_viewport_cameras(usd_path):
-        """Remove Kit's OmniverseKit_* viewport cameras from a just-exported .usd file, in
-        place, by editing it as a flat Sdf layer. We edit the layer directly (not via a
-        stage) so instancing in the source scene is left untouched, and so the live stage's
-        own cameras are never disturbed."""
+        """Remove Kit's OmniverseKit_* viewport cameras from an exported .usd file in place.
+
+        Edits the file as a flat Sdf layer rather than opening it as a stage, which leaves
+        instancing in the source scene alone and never touches the live stage's cameras.
+        """
         try:
             from pxr import Sdf
             layer = Sdf.Layer.FindOrOpen(usd_path)
@@ -1287,9 +1301,9 @@ class PipeRouterPanel:
             import tempfile
             from pxr import UsdUtils
             scene_ops.write_session(stage, self._session_state())
-            # Package into a LOCAL temp file: CreateNewUsdzPackage's zip writer is
-            # local-filesystem only and fails (TfSafeOutputFile::Replace) when the
-            # destination is Nucleus / omniverse:// or a non-writable folder.
+            # Package into a local temp file. CreateNewUsdzPackage's zip writer only
+            # handles the local filesystem and fails in TfSafeOutputFile::Replace when
+            # the destination is an omniverse:// URL or a non-writable folder.
             tmpdir = tempfile.mkdtemp(prefix="piperouter_")
             tmp_src = os.path.join(tmpdir, "session_src.usd")
             tmp_usdz = os.path.join(tmpdir, "session.usdz")
@@ -1298,7 +1312,7 @@ class PipeRouterPanel:
             if not UsdUtils.CreateNewUsdzPackage(tmp_src, tmp_usdz):
                 self._progress.text = "usdz packaging failed"
                 return
-            # then copy the archive to the chosen destination (local OR Nucleus)
+            # Then copy the archive to the chosen destination, local or Nucleus.
             if self._copy_file(tmp_usdz, path):
                 self._progress.text = f"Exported -> {path}"
             else:
@@ -1308,8 +1322,10 @@ class PipeRouterPanel:
 
     @staticmethod
     def _copy_file(src_local, dst):
-        """Copy a local file to dst, which may be a local path OR a Nucleus URL. Uses
-        omni.client (resolver-aware) when the dest isn't a plain local path."""
+        """Copy a local file to `dst`, which may be a local path or a Nucleus URL.
+
+        Falls back to the resolver-aware omni.client when `dst` is not a plain local path.
+        """
         import os
         import shutil
         is_url = "://" in dst
@@ -1355,7 +1371,7 @@ class PipeRouterPanel:
     def _rebuild_wires(self):
         if self._window is None:
             return
-        self._building = True  # suppress callbacks fired while widgets are constructed
+        self._building = True  # ignore callbacks fired while the widgets are constructed
         try:
             self._wire_stack.clear()
             with self._wire_stack:
@@ -1367,17 +1383,16 @@ class PipeRouterPanel:
                     status = "locked" if w["locked"] else w["status"]
                     is_sel = idx == self._selected
                     with ui.HStack(height=0, spacing=4):
-                        # slim accent bar = selection indicator (clearer than the old ">")
                         self._select_bar(is_sel, lambda i=idx: self._select(i),
                                          "Select this wire")
-                        # type color swatch
                         w["_swatch"] = ui.Rectangle(
                             width=12, height=12,
                             style={"background_color": _abgr(color), "border_radius": 2,
                                    "border_width": 1, "border_color": 0xFF222222})
-                        # status chip (green routed / red no-path / blue locked / grey);
-                        # hover a no-path chip to see WHY it failed. A routed wire with a
-                        # warning note (e.g. a relocated buried endpoint) shows amber.
+                        # Status chip: green routed, red no-path, blue locked, grey
+                        # otherwise. Its tooltip carries the failure reason, or amber plus
+                        # a note for a routed wire with a warning such as a relocated
+                        # buried endpoint.
                         chip_tip = status
                         chip_color = _DOT.get(status, _DOT["unrouted"])
                         if w["status"] == "no_path" and w.get("reason"):
@@ -1417,9 +1432,9 @@ class PipeRouterPanel:
             self._wires[idx]["name"] = model.get_value_as_string()
 
     def _set_type(self, idx, model):
-        # NB: do NOT rebuild the list here - rebuilding constructs new ComboBoxes whose
-        # item_changed callbacks re-enter this handler, which previously cleared the
-        # list mid-build and made other wires vanish. Update in place instead.
+        # Never rebuild the wire list from here. A rebuild constructs new ComboBoxes whose
+        # item_changed callbacks re-enter this handler, clearing the list mid-build and
+        # making the other wires disappear. Update the row in place instead.
         if self._building or idx >= len(self._wires):
             return
         try:
@@ -1435,7 +1450,7 @@ class PipeRouterPanel:
         self._selected = idx
         self._selected_bundle = None   # wire selection clears bundle selection
         w = self._wires[idx]
-        # note: must schedule bundles=True so the bundle row highlight clears
+        # The schedule below must pass bundles=True so the bundle row highlight clears.
         paths = [f"{scene_ops.MARKERS_SCOPE}/{w['key']}_start",
                  f"{scene_ops.MARKERS_SCOPE}/{w['key']}_end",
                  *w["waypoints"],
@@ -1457,7 +1472,7 @@ class PipeRouterPanel:
             return
         self._inspector.clear()
         with self._inspector:
-            # bundle selected → show bundle inspector
+            # A selected bundle takes over the inspector.
             if (self._selected is None and self._selected_bundle is not None
                     and self._selected_bundle < len(self._bundles)):
                 self._rebuild_inspector_bundle(self._selected_bundle)
@@ -1481,13 +1496,12 @@ class PipeRouterPanel:
                 ui.Spacer()
                 if w["locked"]:
                     ui.Label("LOCKED", style={"color": 0xFFCC7A33, "font_size": 11})
-            # if this wire failed to route, spell out why
             if w["status"] == "no_path" and w.get("reason"):
                 ui.Label(f"No path: {w['reason']}", word_wrap=True,
                          style={"color": _BAD})
-            elif w.get("note"):   # routed, but with a warning (e.g. relocated endpoint)
+            elif w.get("note"):   # routed, but with a warning such as a moved endpoint
                 ui.Label(w["note"], word_wrap=True, style={"color": _WARN})
-            # --- constraints group
+            # Constraints group.
             ui.Spacer(height=2)
             with ui.HStack(height=0):
                 ui.Label("CONSTRAINTS  (0 = ignore, 10 = strong)",
@@ -1504,16 +1518,16 @@ class PipeRouterPanel:
                     ui.Label(label, width=96, tooltip=help_text)
                     s = ui.FloatSlider(min=0.0, max=10.0, tooltip=help_text)
                     s.model.set_value(w["weights"][k])
-                    # Persist the value into the wire AS IT CHANGES (not just on
-                    # Re-route) so switching to another wire and back keeps it.
+                    # Persist the value into the wire as the slider moves, not only on
+                    # Re-route, so switching to another wire and back keeps it.
                     s.model.add_value_changed_fn(lambda m, kk=k: self._set_weight(kk, m))
                     self._sliders[k] = s
                     val = ui.Label(f"{w['weights'][k]:.1f}", width=30,
                                    alignment=ui.Alignment.RIGHT_CENTER,
                                    style={"color": 0xFFCCCCCC, "font_size": 12})
                     self._slider_vals[k] = val
-            # --- pinned headings group (None = free direction; Custom = rotate the
-            # marker's arrow in the viewport, or type exact angles below)
+            # Pinned headings. None leaves the direction free; Custom is set by rotating
+            # the marker's arrow in the viewport or by typing angles below.
             ui.Spacer(height=2)
             ui.Label("HEADINGS  (optional; None = free direction)",
                      style={"color": _ACCENT, "font_size": 11})
@@ -1521,7 +1535,7 @@ class PipeRouterPanel:
                               "Force the wire to LEAVE the start in this direction.")
             self._heading_row(w, "end",
                               "Force the wire to ARRIVE at the end in this direction.")
-            # --- waypoints / route order group
+            # Waypoints and route order.
             ui.Spacer(height=2)
             ui.Label("WAYPOINTS & ROUTE ORDER", style={"color": _ACCENT, "font_size": 11})
             ui.Button("+ Add waypoint (route must pass through)", height=_BTN_H,
@@ -1537,7 +1551,7 @@ class PipeRouterPanel:
                                  style={"background_color": color, "border_radius": 6,
                                         "border_width": 1, "border_color": 0x44000000})
 
-                def _anchor(text, color):  # Start / End markers (not draggable)
+                def _anchor(text, color):  # the Start and End rows, which cannot be dragged
                     with ui.HStack(height=24, spacing=8):
                         ui.Spacer(width=6)
                         _dot(color)
@@ -1571,7 +1585,7 @@ class PipeRouterPanel:
                             ui.Button("Delete", width=62, height=_MINI_H,
                                       style={"color": 0xFFCC6666},
                                       clicked_fn=lambda j=wpi: self._delete_waypoint(j))
-                    # every row is a drop target -> move dragged waypoint to this position
+                    # Every row is a drop target: dropping moves the dragged waypoint here.
                     row.set_accept_drop_fn(lambda *_: True)
                     row.set_drop_fn(lambda e, dst=d: self._move_wire_waypoint(
                         int(e.mime_data), dst))
@@ -1590,7 +1604,7 @@ class PipeRouterPanel:
                           style={"background_color": _PRIMARY, "color": 0xFFFFFFFF})
                 ui.Button("Unlock" if w["locked"] else "Lock", width=80, height=_CTA_H,
                           clicked_fn=self._toggle_lock)
-            # --- per-wire debug visualizations ---
+            # Per-wire debug visualizations.
             ui.Rectangle(height=1, style={"background_color": _DIVIDER})
             ui.Label("DEBUG VIEW  (authors into /World/PipeRouter/debug)",
                      style={"color": _ACCENT, "font_size": 11})
@@ -1605,7 +1619,7 @@ class PipeRouterPanel:
             _WIRE_DEBUG_IDS = (
                 "none", "cells", "raw_path", "cost_terrain", "bend_radius", "octree",
             )
-            # reflect the live debug view for this wire (persists across reroutes)
+            # Reflect the live debug view for this wire; it persists across re-routes.
             cur = (self._active_debug[1]
                    if self._active_debug and self._active_debug[0] == w["name"] else "none")
             cur_idx = _WIRE_DEBUG_IDS.index(cur) if cur in _WIRE_DEBUG_IDS else 0
@@ -1615,8 +1629,11 @@ class PipeRouterPanel:
                     self._on_wire_debug(ww, ids[int(m.get_item_value_model().get_value_as_int())]))
 
     def _debug_payload(self, w):
-        """Wire dict for show_wire_debug, with spec attached so the bend heatmap uses the
-        wire's real min_bend_radius and the cells use its color."""
+        """Return the wire dict for show_wire_debug with its spec attached.
+
+        The spec gives the bend heatmap the wire's own min_bend_radius and the cells its
+        color.
+        """
         d = dict(w)
         d["spec"] = wire_library.as_spec(self._types[w["type_index"]])
         return d
@@ -1628,8 +1645,10 @@ class PipeRouterPanel:
             self._progress.text = err
 
     def _refresh_debug(self):
-        """Re-author the live per-wire debug view against the latest grids/polyline, so it
-        stays correct after a Route All / Re-route (otherwise it shows stale geometry)."""
+        """Re-author the live per-wire debug view against the latest grids and polyline.
+
+        Must run after any Route All or Re-route, otherwise the view shows stale geometry.
+        """
         if not self._active_debug:
             return
         name, mode = self._active_debug
@@ -1640,7 +1659,7 @@ class PipeRouterPanel:
         self._api.show_wire_debug(self._debug_payload(w), mode)
 
     def _rebuild_inspector_bundle(self, bidx):
-        """Bundle inspector shown inside the Selected wire frame when a bundle is selected."""
+        """Build the bundle inspector, shown inside the Selected wire frame."""
         b = self._bundles[bidx]
         status = b["status"]
         with ui.HStack(height=0, spacing=6):
@@ -1653,14 +1672,13 @@ class PipeRouterPanel:
                                 "border_radius": 7})
             ui.Label(f"{b['name']}", style={"font_size": 16})
             ui.Label(f"bundle ({b['kind']})", style={"color": 0xFFAAAAAA})
-        # members summary
         mem_str = ", ".join(b["members"]) if b["members"] else "(none)"
         ui.Label(f"Members: {mem_str}", word_wrap=True,
                  style={"color": 0xFF999999})
         if status == "no_path" and b.get("reason"):
             ui.Label(f"No path: {b['reason']}", word_wrap=True,
                      style={"color": _BAD})
-        # harness type selector (controls trunk BOM cost)
+        # Harness type selector; it drives the trunk BOM cost.
         if self._bundle_type_labels:
             with ui.HStack(height=0):
                 ui.Label("Harness type", width=96,
@@ -1669,14 +1687,13 @@ class PipeRouterPanel:
                 btc = ui.ComboBox(tidx, *self._bundle_type_labels)
                 btc.model.add_item_changed_fn(
                     lambda m, e, i=bidx: self._set_bundle_type(i, m))
-            # show cost for selected type
             bt = (self._bundle_types[b.get("type_index", 0)]
                   if self._bundle_types else None)
             if bt:
                 ui.Label(f"  ${bt['cost_per_m']:.2f}/m  |  "
                          f"{bt['mass_per_m_kg']*1000:.0f} g/m",
                          style={"color": 0xFF999999, "font_size": 12})
-        # --- trunk constraints group
+        # Trunk constraints group.
         ui.Spacer(height=2)
         with ui.HStack(height=0):
             ui.Label("TRUNK CONSTRAINTS  (0 = ignore, 10 = strong)",
@@ -1700,7 +1717,7 @@ class PipeRouterPanel:
                                alignment=self._num_align(),
                                style={"color": 0xFFCCCCCC, "font_size": 12})
                 self._bundle_slider_vals[k] = val
-        # --- waypoints group
+        # Waypoints group.
         ui.Spacer(height=2)
         ui.Label("WAYPOINTS  (trunk sequence)", style={"color": _ACCENT, "font_size": 11})
         ui.Button("+ Add waypoint (trunk must pass through)", height=_BTN_H,
@@ -1750,8 +1767,8 @@ class PipeRouterPanel:
                 s.model.set_value(_DEFAULT_WEIGHT)
 
     def _set_weight(self, k, model):
-        # Live-write a slider value into the currently selected wire's weights so it
-        # survives selecting another wire and coming back.
+        # Write the slider value straight into the selected wire's weights so it survives
+        # selecting another wire and coming back.
         if self._selected is None or self._selected >= len(self._wires):
             return
         v = float(model.get_value_as_float())
@@ -1771,7 +1788,7 @@ class PipeRouterPanel:
             if s is not None:
                 s.model.set_value(_DEFAULT_WEIGHT)   # fires _set_weight -> updates readout
 
-    # ----- start/end heading (axis presets, or a rotatable marker arrow = "Custom") -----
+    # Start/end heading: axis presets, or a rotatable marker arrow under "Custom".
     _HEAD_COLORS = {"start": (0.2, 0.9, 0.2), "end": (0.9, 0.2, 0.2)}
 
     @staticmethod
@@ -1786,10 +1803,13 @@ class PipeRouterPanel:
         return f"{scene_ops.MARKERS_SCOPE}/{w['key']}_{which}"
 
     def _heading_row(self, w, which, tip):
-        """One heading row: combo (None / axes / Custom) + azimuth/elevation angle
-        fields when Custom is selected. The angles and the marker's arrow stay in sync:
-        typing angles re-aims the marker; rotating the marker in the viewport wins at
-        route time (the solver reads the marker's rotated +X axis)."""
+        """Build one heading row: a None/axis/Custom combo, plus azimuth and elevation
+        fields when Custom is selected.
+
+        The angles and the marker's arrow stay in sync. Typing angles re-aims the marker,
+        and rotating the marker in the viewport wins at route time, since the solver reads
+        the marker's rotated local +X axis.
+        """
         key = f"{which}_head_idx"
         idx = int(w.get(key, 0))
         with ui.HStack(height=0):
@@ -1816,22 +1836,23 @@ class PipeRouterPanel:
                          tooltip="Degrees toward the up-axis (+90 = straight up).")
                 elf = ui.FloatDrag(min=-90.0, max=90.0, step=1.0)
                 elf.model.set_value(el)
-                # attach AFTER set_value so building the row doesn't fire the callback
+                # Attach the observers after set_value, otherwise building the row fires
+                # the callback and writes back a spurious heading.
                 azf.model.add_value_changed_fn(
                     lambda m, wh=which, a=azf, e=elf: self._set_heading_angles(wh, a, e))
                 elf.model.add_value_changed_fn(
                     lambda m, wh=which, a=azf, e=elf: self._set_heading_angles(wh, a, e))
 
     def _set_heading(self, key, model):
-        # Persist the chosen heading index (mirrors _set_weight), then sync the marker's
-        # arrow: axis presets aim it, Custom shows it (keeping the current rotation),
-        # None hides it. Rebuild the inspector so the angle fields appear/disappear.
+        # Persist the chosen heading index, then sync the marker's arrow: axis presets aim
+        # it, Custom shows it while keeping the current rotation, None hides it. The
+        # inspector rebuild makes the angle fields appear or disappear.
         if self._selected is None or self._selected >= len(self._wires):
             return
         idx = int(model.get_item_value_model().get_value_as_int())
         w = self._wires[self._selected]
         if int(w.get(key, 0)) == idx:
-            return                      # combo fired without a real change (e.g. rebuild)
+            return                      # the combo fired without a real change, e.g. on rebuild
         w[key] = idx
         self._refresh_heading_arrow(w, "start" if key.startswith("start") else "end")
         self._schedule(inspector=True)
@@ -1845,7 +1866,7 @@ class PipeRouterPanel:
                  if 0 <= idx < len(headings.HEADING_OPTIONS) else "None")
         path = self._marker_path(w, which)
         color = self._HEAD_COLORS[which]
-        inc = which == "end"   # end arrow drawn arriving INTO the marker
+        inc = which == "end"   # the end arrow is drawn arriving into the marker
         if label == "None":
             scene_ops.set_marker_direction(stage, path, None, show=False)
         elif label == headings.CUSTOM:
@@ -1856,7 +1877,7 @@ class PipeRouterPanel:
                                            show=True, color=color, incoming=inc)
 
     def _set_heading_angles(self, which, az_field, el_field):
-        """Angle fields -> re-aim the marker's arrow (Custom mode)."""
+        """Re-aim the marker's arrow from the azimuth/elevation fields, in Custom mode."""
         if self._selected is None or self._selected >= len(self._wires):
             return
         stage = self._get_stage()
@@ -1871,8 +1892,11 @@ class PipeRouterPanel:
                                        incoming=(which == "end"))
 
     def _heading_vector(self, stage, w, which):
-        """The heading vector to send to the solver: None (free), an axis preset, or -
-        for Custom - the marker's rotated local +X axis read from the stage."""
+        """Return the heading vector to send to the solver.
+
+        None when the direction is free, an axis preset, or for Custom the marker's
+        rotated local +X axis read from the stage.
+        """
         idx = int(w.get(f"{which}_head_idx", 0))
         label = (headings.HEADING_OPTIONS[idx]
                  if 0 <= idx < len(headings.HEADING_OPTIONS) else "None")
@@ -1890,26 +1914,28 @@ class PipeRouterPanel:
         n = w["wp_counter"]
         w["wp_counter"] += 1
         path = f"{scene_ops.MARKERS_SCOPE}/{w['key']}_wp{n}"
-        # spawn near the wire's start so it's easy to find, then the user drags it
-        inv = self._stage_inv(stage)  # meters -> stage units (cm/mm/m agnostic)
+        # Spawn near the wire's start so it is easy to find, then the user drags it.
+        inv = self._stage_inv(stage)  # meters -> stage units, whatever the stage uses
         start = scene_ops.get_world_pos(stage, f"{scene_ops.MARKERS_SCOPE}/{w['key']}_start")
         pos = (float(start[0]) + 0.3 * inv, float(start[1]), float(start[2])) if start is not None \
             else (0.25 * inv, 0.0, 0.0)
         scene_ops.spawn_waypoint_marker(stage, path, pos, color=(0.1, 0.5, 0.9),
                                          radius=self._marker_radius(stage) * 1.2)
         w["waypoints"].append(path)
-        # new waypoint lands in the last gap (after all the wire's bundles, before end);
-        # the user drags it earlier in the itinerary if they want.
+        # A new waypoint lands in the last gap, after all the wire's bundles and before
+        # the end. The user drags it earlier in the itinerary if they want.
         w.setdefault("wp_slots", []).append(len(self._wire_bundles(w)))
         self._api.select_prim(path)  # auto-select so it can be dragged immediately
         self._schedule(inspector=True)
 
     @staticmethod
     def _snap_to_centerline(world_xyz, polyline_m, inv):
-        """Project a surface-hit world point onto the wire's centerline (its route polyline)
-        so a dropped waypoint sits in the MIDDLE of the tube, not on its surface. polyline_m
-        is in METERS; we scale it to stage units (×inv) to match world_xyz. Falls back to the
-        raw point if there's no polyline yet."""
+        """Project a surface-hit world point onto the wire's route polyline.
+
+        Keeps a dropped waypoint in the middle of the tube rather than on its skin.
+        `polyline_m` is in meters and is scaled by `inv` into stage units to match
+        `world_xyz`. Falls back to the raw point when there is no polyline yet.
+        """
         import numpy as np
         if not polyline_m or len(polyline_m) < 2:
             return list(world_xyz)
@@ -1927,14 +1953,16 @@ class PipeRouterPanel:
         return [float(x) for x in best]
 
     def _on_viewport_pick(self, world_xyz, hit_path):
-        """Viewport double-click. If a wire is selected and the click landed on THAT wire's
-        routed tube (or one of its bundle branch segments), drop a waypoint exactly at the
-        picked world point - appended in click order, so clicking points along the wire in
-        sequence builds the route order naturally.
+        """Handle a viewport double-click by dropping a waypoint on the selected wire.
 
-        Wrapped so a failure (e.g. a Kit-version quirk in the pick callback, or a stale
-        selection after a rebuild) surfaces a clear message + a full log entry instead of a
-        raw traceback in the console."""
+        Only fires when the click landed on the selected wire's own routed tube or one of
+        its bundle branch segments. Waypoints are appended in click order, so clicking
+        along the wire in sequence builds the route order naturally.
+
+        Wrapped so that a Kit-version quirk in the pick callback or a stale selection
+        after a rebuild surfaces a readable message and a log entry rather than a raw
+        traceback in the console.
+        """
         try:
             self._do_viewport_pick(world_xyz, hit_path)
         except Exception as exc:  # noqa: BLE001
@@ -1958,8 +1986,8 @@ class PipeRouterPanel:
         stage = self._get_stage()
         if stage is None:
             return
-        # The pick lands on the tube SURFACE; snap it to the cable CENTERLINE (the route
-        # polyline) at that spot, so the waypoint sits in the middle of the wire.
+        # The pick lands on the tube surface, so snap it onto the route polyline at that
+        # spot to put the waypoint on the cable centerline.
         center = self._snap_to_centerline(world_xyz, w.get("polyline"),
                                           self._stage_inv(stage))
         n = w["wp_counter"]
@@ -1990,15 +2018,18 @@ class PipeRouterPanel:
             del w["wp_slots"][idx]
         self._schedule(inspector=True)
 
-    # ----- per-wire route itinerary (waypoints interleaved with bundle steps) -----
+    # Per-wire route itinerary: waypoints interleaved with bundle steps.
     def _wire_bundles(self, w):
-        """The wire's bundles in the GLOBAL bundle order (self._bundles order)."""
+        """Return the wire's bundles in the global order of `self._bundles`."""
         return [b for b in self._bundles if w["name"] in b["members"]]
 
     def _wire_itinerary(self, w):
-        """Ordered list of route steps between start and end: waypoints (placed by their
-        slot) interleaved with this wire's bundle trunks (in global order). Each token is
-        {"kind": "wp", "wpi": <waypoint index>, "path": ...} or {"kind": "bundle", ...}."""
+        """Return the ordered route steps between start and end.
+
+        Waypoints are placed by their slot and interleaved with this wire's bundle trunks
+        in global order. Each token is {"kind": "wp", "wpi": <waypoint index>, "path": ...}
+        or {"kind": "bundle", ...}.
+        """
         bundles = self._wire_bundles(w)
         K = len(bundles)
         slots = w.get("wp_slots", [])
@@ -2014,9 +2045,11 @@ class PipeRouterPanel:
         return tokens
 
     def _move_wire_waypoint(self, src_disp, dst_disp):
-        """Drag-drop within the itinerary: move the waypoint at display index src_disp to
-        display index dst_disp, then recompute every waypoint's slot from the new order
-        (slot = number of bundle steps before it). Bundles keep their global order."""
+        """Move the waypoint at itinerary index `src_disp` to index `dst_disp`.
+
+        Every waypoint's slot is recomputed from the new order, a slot being the number of
+        bundle steps before it. Bundles keep their global order.
+        """
         if self._selected is None or self._selected >= len(self._wires):
             return
         w = self._wires[self._selected]
@@ -2032,9 +2065,9 @@ class PipeRouterPanel:
                 new_paths.append(t["path"])
                 new_slots.append(bcount)
         w["waypoints"], w["wp_slots"] = new_paths, new_slots
-        self._schedule(inspector=True)  # re-renders itinerary + refreshes viewport labels
+        self._schedule(inspector=True)  # re-renders the itinerary and the viewport labels
 
-    # ----- bundle trunk waypoints (the shared trunk must pass through these) -----
+    # Bundle trunk waypoints: the shared trunk must pass through these.
     def _add_bundle_waypoint(self):
         stage = self._get_stage()
         if stage is None or self._selected_bundle is None \
@@ -2044,11 +2077,11 @@ class PipeRouterPanel:
         n = b["wp_counter"]
         b["wp_counter"] += 1
         path = f"{scene_ops.MARKERS_SCOPE}/{b['id']}_wp{n}"
-        inv = self._stage_inv(stage)  # meters -> stage units (cm/mm/m agnostic)
+        inv = self._stage_inv(stage)  # meters -> stage units, whatever the stage uses
         merge = scene_ops.get_world_pos(stage, b["merge_marker"])
         pos = (float(merge[0]) + 0.3 * inv, float(merge[1]), float(merge[2])) \
             if merge is not None else (0.25 * inv, 0.0, 0.0)
-        # amber-ish so trunk waypoints read as "bundle", and see-through like the rest
+        # Amber, so trunk waypoints read as belonging to a bundle.
         scene_ops.spawn_waypoint_marker(stage, path, pos, color=(0.95, 0.6, 0.1),
                                          radius=0.045 * inv)
         b["waypoints"].append(path)
@@ -2078,12 +2111,13 @@ class PipeRouterPanel:
         self._schedule(inspector=True)
 
     def _refresh_vp_labels(self):
-        """Persistent viewport text for EVERY wire and bundle (always on, not just the
-        selection). Each wire <n> shows W<n>S at its start, W<n>.<k> above its k-th
-        waypoint, and W<n>E at its end; each bundle <n> shows B<n>S at its start (merge)
-        marker and B<n>E at its end (split) marker."""
+        """Re-author the persistent viewport text for every wire and bundle.
+
+        Wire <n> gets W<n>S at its start, W<n>.<k> above its k-th waypoint and W<n>E at
+        its end. Bundle <n> gets B<n>S at its merge marker and B<n>E at its split marker.
+        """
         if getattr(self, "_picker", None) is not None:
-            self._picker.enable()   # arm the double-click picker once the viewport exists (no-op after)
+            self._picker.enable()   # arms the double-click picker once the viewport exists
         vpl = getattr(self, "_vp_labels", None)
         if vpl is None:
             return
@@ -2116,9 +2150,11 @@ class PipeRouterPanel:
         vpl.update(items)
 
     def _stage_up_offset(self, stage):
-        """Small world-space offset along the stage up-axis so labels float JUST above their
-        markers - scene-relative (~2× the marker radius), so it stays tight to the point on
-        a 1 m harness or a big bay alike, instead of a fixed (too-high) distance."""
+        """Return a world-space offset along the stage up-axis for floating labels.
+
+        Sized at twice the marker radius so labels stay tight to their marker on a 1 m
+        harness and on a large engine bay alike.
+        """
         try:
             from pxr import UsdGeom
             axis = UsdGeom.GetStageUpAxis(stage)
@@ -2179,7 +2215,7 @@ class PipeRouterPanel:
                 w["status"] = r["status"]
                 w["polyline"] = r.get("polyline") if r["status"] == "routed" else None
                 w["reason"] = r.get("reason", "") if r["status"] != "routed" else ""
-                w["note"] = r.get("note", "")          # buried-endpoint relocation warning
+                w["note"] = r.get("note", "")          # e.g. buried-endpoint relocation
                 w["cells"] = r.get("cells", [])
                 w["raw_polyline"] = r.get("raw_polyline") if r["status"] == "routed" else None
         for b_row in (bom or []):
@@ -2187,7 +2223,7 @@ class PipeRouterPanel:
                 if w["name"] == b_row["wire_id"]:
                     w["length_m"] = b_row["length_m"]
                     w["cost"] = b_row["cost"]
-        # update bundle statuses from trunk results
+        # Update bundle statuses from the trunk results.
         if has_bundles:
             for b in self._bundles:
                 trunk_id = f"bundle_{b['id']}_trunk"
@@ -2205,7 +2241,7 @@ class PipeRouterPanel:
         self._refresh_overlay()
         self._refresh_hud()
         self._refresh_debug()
-        self._update_readout()   # now shows the ACTUAL routed voxel size
+        self._update_readout()   # now reports the voxel size the route actually used
 
     def _on_refine(self):
         if self._selected is None:
@@ -2214,9 +2250,9 @@ class PipeRouterPanel:
         for k, s in getattr(self, "_sliders", {}).items():
             w["weights"][k] = s.model.get_value_as_float()
 
-        # If this wire belongs to any bundles, re-routing it must also re-route those
-        # bundles (trunk + this wire's branches) - otherwise the wire ignores the shared
-        # trunk it's supposed to pass through.
+        # If this wire belongs to any bundles, re-routing it must re-route their trunks
+        # and branches too, otherwise the wire ignores the shared trunk it is meant to
+        # pass through.
         my_bundles = [b for b in self._bundles if w["name"] in b["members"]]
         if my_bundles:
             self._progress.text = (f"re-routing bundle(s) containing {w['name']}...")
@@ -2227,8 +2263,8 @@ class PipeRouterPanel:
         if wire is None:
             self._progress.text = "wire has no endpoints"
             return
-        # Every OTHER already-routed wire is an obstacle, so re-routing this one
-        # never overlaps the rest.
+        # Every other already-routed wire becomes an obstacle, so re-routing this one
+        # cannot overlap the rest.
         obstacles = [{"spec": wire_library.as_spec(self._types[ow["type_index"]]),
                       "polyline": ow["polyline"]}
                      for ow in self._wires if ow is not w and ow.get("polyline")]
@@ -2260,7 +2296,7 @@ class PipeRouterPanel:
         self._refresh_debug()
 
     def _on_refine_bundle(self):
-        """Re-route the currently selected bundle (called from bundle inspector)."""
+        """Re-route the currently selected bundle. Called from the bundle inspector."""
         if self._selected_bundle is None or self._selected_bundle >= len(self._bundles):
             return
         b = self._bundles[self._selected_bundle]
@@ -2270,16 +2306,20 @@ class PipeRouterPanel:
         self._run_bundle_reroute([b])
 
     def _run_bundle_reroute(self, bundles_to_reroute, trigger_wire=None):
-        """Re-route a list of bundles (trunk + all member branches each).
-        ALL bundles are passed to route_all_bundles so the two-phase algorithm
-        correctly builds the full segment sequence for wires shared across multiple
-        bundles - e.g. a wire in B1 and B2 needs B1's split position even when
-        we're only explicitly re-routing B2.
-        trigger_wire: name of the member wire that triggered this reroute (for the log)."""
+        """Re-route the given bundles, trunk and member branches alike.
+
+        Every bundle is passed to route_all_bundles, not just the listed ones, so the
+        two-phase algorithm can build the full segment sequence for wires shared across
+        bundles: a wire in both B1 and B2 needs B1's split position even when only B2 is
+        being re-routed.
+
+        `trigger_wire` is the member wire that triggered the re-route, used in the status
+        message.
+        """
         pairs = [(w, self._gather_wire(w, i)) for i, w in enumerate(self._wires)]
         wires = [g for (_w, g) in pairs if g]
         results, bom, err = self._api.route_all_bundles(
-            wires, self._bundles_with_cost(),   # ALL bundles with harness type costs
+            wires, self._bundles_with_cost(),   # every bundle, with harness type costs
             self._res.model.get_value_as_int(),
             self._url_value(), self._global_algo(), self._local_algo())
         if err:
@@ -2317,19 +2357,22 @@ class PipeRouterPanel:
         self._refresh_overlay()
         self._refresh_hud()
         self._refresh_debug()
-        self._update_readout()   # now shows the ACTUAL routed voxel size
+        self._update_readout()   # now reports the voxel size the route actually used
 
     # ------------------------------------------------------ tag / overlay / io
     def _refresh_views(self, force=False):
-        """Rebuild the XY/XZ/YZ projection images. The render voxelizes at a high
-        resolution, so auto-calls (after routing) are skipped unless the section is
-        open; the 'Refresh 2D views' button forces it."""
+        """Rebuild the XY, XZ and YZ projection images.
+
+        The render voxelizes at a high resolution, so automatic calls after routing are
+        skipped while the section is collapsed. The 'Refresh 2D views' button passes
+        force=True.
+        """
         frame = getattr(self, "_views_frame", None)
         if not force and frame is not None and frame.collapsed:
             return
         routes = [{"points": w["polyline"], "color": self._types[w["type_index"]]["color"]}
                   for w in self._wires if w.get("polyline") and w["status"] == "routed"]
-        # bundle trunks render white so they're distinct in the 2D cross-sections
+        # Bundle trunks render white so they stand out in the 2D cross-sections.
         for b in getattr(self, "_bundles", []):
             if b.get("trunk_polyline") and b["status"] == "routed":
                 routes.append({"points": b["trunk_polyline"], "color": (1.0, 1.0, 1.0)})
@@ -2345,7 +2388,7 @@ class PipeRouterPanel:
             try:
                 h, w = int(img.shape[0]), int(img.shape[1])
                 prov.set_bytes_data(img.reshape(-1).tolist(), [w, h])
-            except Exception as exc:  # omni.ui image API differences - non-fatal
+            except Exception as exc:  # non-fatal; the omni.ui image API varies by build
                 self._progress.text = f"views: {exc}"
                 return
 
@@ -2360,8 +2403,10 @@ class PipeRouterPanel:
             self._schedule(tags=True)
 
     def _refresh_overlay(self):
-        """Re-render the active debug overlay (occupancy/thermal/em) with the latest
-        grids; no-op if the overlay is set to None."""
+        """Re-render the active occupancy, thermal or EM overlay against the latest grids.
+
+        Does nothing when the overlay combo is set to None.
+        """
         combo = getattr(self, "_overlay_combo", None)
         if combo is None:
             return
@@ -2420,7 +2465,7 @@ class PipeRouterPanel:
         if self._window:
             self._window.destroy()
             self._window = None
-        # break reference cycles so the extension object is released on reload
+        # Break the reference cycles so the extension object is released on reload.
         self._api = None
         self._get_stage = None
         self._wires = []

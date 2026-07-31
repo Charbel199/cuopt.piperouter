@@ -1,18 +1,19 @@
 """GPU mesh voxelization with Warp.
 
-One kernel classifies each cell via a signed-distance query against the merged
-scene mesh: occupied if inside (sign < 0) or within `clearance` of the surface, and
-emits the distance-to-surface field in the same pass (so no scipy dependency). Runs
-on CUDA when available, else on Warp's CPU device (keeps it testable without a GPU).
+A single kernel classifies each cell with a signed-distance query against the merged
+scene mesh: occupied when inside (sign < 0) or within `clearance` of the surface. The
+same pass emits the distance-to-surface field, which avoids a scipy dependency. Runs on
+CUDA when available and on Warp's CPU device otherwise, so it stays testable without a
+GPU.
 """
 from __future__ import annotations
 
 import numpy as np
 from pxr import Usd, UsdGeom
 
-# Warp is imported lazily (see _ensure_warp) so this module - and therefore the
-# whole extension - loads even in a Kit app that hasn't enabled omni.warp. Warp is
-# only required when voxelize() actually runs, and then we raise a clear error.
+# Warp is imported lazily (see _ensure_warp) so this module, and therefore the whole
+# extension, still loads in a Kit app that has not enabled omni.warp. It is only needed
+# once voxelize() runs, which is where the missing-dependency error is raised.
 _wp = None
 _kernel = None
 
@@ -23,7 +24,7 @@ def _ensure_warp():
         return _wp, _kernel
     try:
         import warp as wp
-    except Exception as exc:  # pragma: no cover - depends on host app
+    except Exception as exc:  # pragma: no cover, depends on the host app
         raise RuntimeError(
             "NVIDIA Warp is required for voxelization but is not available in this "
             "Kit app. Enable the 'omni.warp.core' extension (it ships with Isaac Sim "
@@ -31,6 +32,8 @@ def _ensure_warp():
         ) from exc
     wp.init()
 
+    # The kernel is declared here rather than at module scope because @wp.kernel
+    # compiles at decoration time and needs wp.init() to have run.
     @wp.kernel
     def _voxelize_kernel(
         mesh_id: wp.uint64,
@@ -44,6 +47,8 @@ def _ensure_warp():
         occupied: wp.array(dtype=wp.int32),
         dist_out: wp.array(dtype=wp.float32),
     ):
+        # Launched with dim=(ri, rj, rk), so wp.tid() yields the three cell indices;
+        # the output arrays are flat, hence the manual row-major index below.
         i, j, k = wp.tid()
         center = wp.vec3(
             origin[0] + (float(i) + 0.5) * cell_size,
@@ -51,21 +56,21 @@ def _ensure_warp():
             origin[2] + (float(k) + 0.5) * cell_size,
         )
         idx = i * rj * rk + j * rk + k
-        # Winding-number sign test: robust inside/outside for closed and MULTI-component
-        # meshes. (The older sign_normal test uses the nearest face's normal, which
-        # misclassifies points between two objects / near concavities as "inside",
-        # producing occupancy artifacts in empty gaps.)
+        # The winding-number sign test stays correct for closed multi-component meshes.
+        # Warp's sign_normal variant judges by the nearest face's normal, which reads
+        # points between two objects or near a concavity as inside and leaves occupancy
+        # artifacts in empty gaps.
         query = wp.mesh_query_point_sign_winding_number(mesh_id, center, max_dist, 2.0, 0.5)
         if query.result:
             cp = wp.mesh_eval_position(mesh_id, query.face, query.u, query.v)
             d = wp.length(center - cp)
             dist_out[idx] = d
             if query.sign < 0.0:
-                occupied[idx] = 1            # cell centre inside a solid (>=cell-thick) volume
+                occupied[idx] = 1            # centre inside a solid at least a cell thick
             elif d < surface_band:
-                occupied[idx] = 1            # surface passes THROUGH this cell -> watertight
+                occupied[idx] = 1            # surface crosses this cell, keeps walls sealed
             elif d < clearance:
-                occupied[idx] = 1            # within requested safety clearance of the surface
+                occupied[idx] = 1            # inside the requested safety clearance
         else:
             dist_out[idx] = max_dist
 
@@ -108,7 +113,10 @@ def _fan_triangulate(face_indices, face_counts, vert_offset):
 
 
 def collect_meshes(stage, prims):
-    """Merge UsdGeom.Mesh prims into world-space (points f32 (N,3), indices i32)."""
+    """Merge UsdGeom.Mesh prims into one world-space (points f32 (N,3), indices i32).
+
+    Non-mesh prims and meshes missing points or topology are skipped.
+    """
     xform_cache = UsdGeom.XformCache(Usd.TimeCode.Default())
     point_chunks = []
     index_chunks = []
@@ -142,17 +150,18 @@ def voxelize(points, indices, bounds_min, cell_size, res_xyz,
     """Return (occupancy uint8 (ri,rj,rk), surface_dist float32 (ri,rj,rk))."""
     ri, rj, rk = int(res_xyz[0]), int(res_xyz[1]), int(res_xyz[2])
     if clearance is None:
-        # 0 = beyond the watertight surface band (below), add no extra safety margin
-        # here. Safety clearance is added later as a dilation (solver + overlay), so it
-        # visibly grows outward.
+        # No extra margin beyond the watertight surface band below. Safety clearance is
+        # applied later as a dilation, in both the solver and the overlay, so the user
+        # sees it grow outward.
         clearance = 0.0
     if surface_band is None:
-        # Mark cells the surface passes THROUGH so thin shells (door panels, sheet metal)
-        # are watertight even when no cell centre lands inside them. A continuous wall's
-        # nearest cell-centre is at most 0.5*cell away (axis-aligned worst case; tilted
-        # planes are closer), so 0.6*cell guarantees every column crossing the wall has
-        # an occupied cell - no straight-line tunnelling - while adding only a thin shell
-        # (not the ~1-cell dilation a full half-diagonal band would impose on every solid).
+        # Marking the cells a surface passes through keeps thin shells (door panels,
+        # sheet metal) watertight even when no cell centre lands inside them. A
+        # continuous wall's nearest cell centre is at most 0.5 cells away in the
+        # axis-aligned worst case, so 0.6 cells guarantees an occupied cell in every
+        # column that crosses the wall, closing off straight-line tunnelling. A full
+        # half-diagonal band would seal it too, but at the cost of roughly a cell of
+        # dilation on every solid.
         surface_band = 0.6 * float(cell_size)
     if max_dist is None:
         max_dist = 8.0 * float(cell_size)

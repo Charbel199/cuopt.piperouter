@@ -1,9 +1,8 @@
-"""Algorithm comparison harness: run every GLOBAL x LOCAL combination over the same
-fixture wires on the complex scene and print a scored table - so picking algorithms is a
-measurement, not an opinion.
+"""Compare routing algorithms: run every global x local combination over the same fixture
+wires on the complex demo scene and print a scored table.
 
-Metrics per combo: success rate, avg route length, worst (max) turn angle = gentleness,
-collision violations (should be 0), and wall-clock time.
+Per combo: how many wires routed, then over the wires that every combo routed, the mean
+cost, bend count, surface-hug distance and wall-clock time.
 
 Run:  PYTHONPATH=services/solver:exts/omni.piperouter python3 services/solver/bench_algos.py
 """
@@ -38,19 +37,6 @@ def _wire(spec):
     )
 
 
-def _max_turn_deg(poly):
-    p = [np.asarray(x, dtype=float) for x in poly]
-    worst = 0.0
-    for i in range(1, len(p) - 1):
-        a, b = p[i] - p[i - 1], p[i + 1] - p[i]
-        na, nb = np.linalg.norm(a), np.linalg.norm(b)
-        if na < 1e-9 or nb < 1e-9:
-            continue
-        ang = np.degrees(np.arccos(np.clip(np.dot(a / na, b / nb), -1, 1)))
-        worst = max(worst, float(ang))
-    return worst
-
-
 def main():
     stage = Usd.Stage.CreateInMemory()
     descr = sample_scene.build_complex_scene(stage)[:N_WIRES]
@@ -76,7 +62,7 @@ def main():
     n = len(jobs)
 
     def turn_count(poly):
-        """Number of vertices that turn more than 20 deg = how many real bends."""
+        """Count vertices turning by more than 20 deg, i.e. the real bends."""
         p = [np.asarray(x, dtype=float) for x in poly]
         c = 0
         for i in range(1, len(p) - 1):
@@ -89,8 +75,11 @@ def main():
         return c
 
     def hug_mm(poly):
-        """Avg distance-to-nearest-surface along the route (mm). LOWER = hugs clippable
-        surfaces (good for harness fixing); higher = floats in open air."""
+        """Mean distance to the nearest surface along the route, in mm.
+
+        Low values mean the route hugs surfaces it could be clipped to; high values
+        mean it floats in open air.
+        """
         vals = []
         for p in poly:
             i, j, k = stack.frame.world_to_grid((float(p[0]), float(p[1]), float(p[2])))
@@ -98,7 +87,7 @@ def main():
                 vals.append(float(sd[i, j, k]))
         return (sum(vals) / len(vals) * 1000.0) if vals else 0.0
 
-    # pass 1: route everything, store per-combo per-wire result
+    # Pass 1: route everything, keeping the per-combo, per-wire result.
     res_by = {}
     time_by = {}
     for gname in planners.GLOBAL_PLANNERS:
@@ -115,7 +104,7 @@ def main():
             res_by[(gname, lname)] = per
             time_by[(gname, lname)] = (time.perf_counter() - t0) * 1e3
 
-    # common set = wires that EVERY combo routed (apples-to-apples cost/turns/hug)
+    # Common set: wires every combo routed, so cost/turns/hug compare like for like.
     common = [wi for wi in range(n) if all(res_by[c][wi] for c in res_by)]
 
     rows = []
@@ -135,9 +124,9 @@ def main():
             "time": time_by[c],
         })
 
-    # rank: among the combos that route the MOST wires honestly, prefer low cost,
-    # few turns, and good surface-hug (low hug distance). No success-inflation, no
-    # reward for floating off surfaces.
+    # Rank: among the combos routing the most wires, prefer low cost, few turns and a
+    # low hug distance. Combos that route fewer wires are gated down rather than
+    # rewarded for the easier average.
     rmax = max(r["routed"] for r in rows)
     cmin = min(r["cost"] for r in rows)
     tmin = min(r["turns"] for r in rows) or 1.0

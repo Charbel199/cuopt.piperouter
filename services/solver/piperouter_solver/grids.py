@@ -22,11 +22,12 @@ def _xp():
 
 
 def dilate6(mask, k):
-    """6-connected binary dilation by k iterations via shifted ORs - exactly equivalent
-    to scipy.ndimage.binary_dilation(structure=generate_binary_structure(3,1),
-    iterations=k), but vectorized slab ops that run on numpy OR cupy (when
-    PIPEROUTER_GPU_BUILD=1), an order of magnitude faster than scipy's C loop on
-    big grids and ~100x on GPU."""
+    """6-connected binary dilation by k iterations, via shifted ORs.
+
+    Equivalent to scipy.ndimage.binary_dilation(structure=generate_binary_structure(3,1),
+    iterations=k), but as vectorized slab ops that run on either numpy or cupy (when
+    PIPEROUTER_GPU_BUILD=1), which is much faster than scipy's C loop on big grids.
+    """
     m = np.asarray(mask, dtype=bool)
     if k <= 0 or not m.any() or m.all():
         return m.copy()
@@ -55,26 +56,26 @@ class GridStack:
     surface_dist: np.ndarray  # float32, distance (m) to nearest surface
     thermal: np.ndarray       # float32, temperature in deg C
     em: np.ndarray            # float32, EM strength in [0, 1]
-    # per-object clearance (optional): class grid (uint8; 0 = untagged geometry) and the
-    # clearance in METRES for class id i+1 at clearance_values[i].
+    # Optional per-object clearance: class grid (uint8; 0 = untagged geometry) and the
+    # clearance in metres for class id i+1 at clearance_values[i].
     clearance_class: np.ndarray | None = None
     clearance_values: tuple = ()
 
     def dilate_occupancy(self, radius_m: float) -> np.ndarray:
         """Grow blocked cells by a wire radius so the tube body clears meshes.
 
-        Uses round-half-up on radius/cell: a wire whose radius is under half a
-        cell fits in the free space around the centerline and does not dilate
-        (it may legitimately run flush against a surface); larger radii grow the
-        blocked region by the number of cells they actually span.
+        Uses round-half-up on radius/cell: a wire whose radius is under half a cell fits
+        in the free space around the centerline and does not dilate (it may legitimately
+        run flush against a surface); larger radii grow the blocked region by the number
+        of cells they actually span.
 
-        CACHED per dilation-cell count (occupancy is immutable for a stack's
-        lifetime, and route_one/planners call this several times per wire with the
-        same radii). Treat the returned array as READ-ONLY - every current caller
-        copies via .astype() or combines with `|`/`&` into a new array.
+        Cached per dilation-cell count, since occupancy is immutable for a stack's
+        lifetime and route_one/planners call this several times per wire with the same
+        radii. Treat the returned array as read-only; callers copy via .astype() or
+        combine with `|`/`&` into a new array.
         """
-        # +1e-9 keeps the round-half-up boundary robust against float error
-        # (e.g. 0.15/0.1 evaluates to 1.4999..., which must round to 2).
+        # The +1e-9 keeps the round-half-up boundary robust against float error, e.g.
+        # 0.15/0.1 evaluates to 1.4999..., which must still round to 2.
         cells = int(radius_m / self.frame.cell_size + 0.5 + 1e-9)
         cache = self.__dict__.setdefault("_dilate_cache", {})
         hit = cache.get(cells)
@@ -88,8 +89,10 @@ class GridStack:
         return out
 
     def dilate_class(self, class_id: int, dist_m: float) -> np.ndarray:
-        """Dilate ONE clearance class's voxels by dist_m (class 0 = untagged occupancy).
-        Cached per (class_id, cells) - read-only, same convention as dilate_occupancy."""
+        """Dilate a single clearance class's voxels by dist_m (class 0 = untagged occupancy).
+
+        Cached per (class_id, cells); read-only, same convention as dilate_occupancy.
+        """
         cells = int(dist_m / self.frame.cell_size + 0.5 + 1e-9)
         cache = self.__dict__.setdefault("_cls_dilate_cache", {})
         key = (int(class_id), cells)
@@ -109,8 +112,8 @@ class GridStack:
         return mask
 
     def save(self, path: str | Path) -> None:
-        # Uncompressed: the handoff file lives on tmpfs (/dev/shm), so compression
-        # only costs CPU (~seconds of zlib per solve at high resolution).
+        # Uncompressed: the handoff file lives on tmpfs (/dev/shm), so compression would
+        # only cost CPU.
         np.savez(
             path,
             bounds_min=self.frame.bounds_min,

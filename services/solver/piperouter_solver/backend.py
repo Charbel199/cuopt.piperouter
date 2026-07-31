@@ -9,8 +9,8 @@ _sssp_backend_logged = False
 
 
 def _log_sssp_backend(name):
-    """Announce the SSSP backend ONCE, so a silent cuGraph->scipy (GPU->CPU) fallback is
-    visible in the logs instead of quietly costing ~600 ms/wire."""
+    """Announce the SSSP backend once, so a silent cuGraph to scipy (GPU to CPU) fallback
+    shows up in the logs instead of quietly costing time on every wire."""
     global _sssp_backend_logged
     if not _sssp_backend_logged:
         _sssp_backend_logged = True
@@ -23,7 +23,7 @@ def _log_sssp_backend(name):
 
 
 def _to_host(a):
-    """numpy view of an array that may be a cupy (GPU) array (from the GPU edge build)."""
+    """Return a numpy view of an array that may be a cupy array (from the GPU edge build)."""
     cp = getattr(a, "get", None)   # cupy arrays expose .get() -> numpy
     return a.get() if callable(cp) and type(a).__module__.startswith("cupy") else np.asarray(a)
 
@@ -66,9 +66,9 @@ def _cugraph_sssp(src, dst, weight, n_nodes, source_id, sink_id):
     import cudf
     import cugraph
 
-    # cudf.Series accepts a cupy (GPU) array zero-copy OR a numpy array (host->device).
-    # When the lattice was built with the GPU path, src/dst/weight are already cupy
-    # arrays on the device, so this builds the graph with no CPU->GPU transfer.
+    # cudf.Series accepts a cupy array zero-copy, or a numpy array with a host-to-device
+    # copy. When the lattice was built on the GPU path, src/dst/weight are already device
+    # arrays, so the graph is built with no transfer.
     gdf = cudf.DataFrame({"src": cudf.Series(src),
                           "dst": cudf.Series(dst),
                           "weight": cudf.Series(weight)})
@@ -76,10 +76,9 @@ def _cugraph_sssp(src, dst, weight, n_nodes, source_id, sink_id):
     G.from_cudf_edgelist(gdf, source="src", destination="dst", edge_attr="weight")
     res = cugraph.sssp(G, source=source_id)
 
-    # Pull the result columns to host arrays ONCE, then index by vertex. The old code
-    # did res.loc[node, "predecessor"] per path node, and each cudf .loc is a GPU kernel
-    # + sync - ~100ms/route just for reconstruction. A single to_numpy() + array lookup
-    # is ~5-6x faster and identical.
+    # Pull the result columns to host arrays once, then index by vertex. Indexing the cudf
+    # frame per path node instead (res.loc[node, "predecessor"]) costs a GPU kernel launch
+    # and a sync each time.
     verts = res["vertex"].to_numpy()
     dist = res["distance"].to_numpy()
     preds = res["predecessor"].to_numpy()
@@ -99,12 +98,13 @@ def _cugraph_sssp(src, dst, weight, n_nodes, source_id, sink_id):
 
 
 def _walk_predecessors(pred_of, sink_id, source_id):
-    """Rebuild sink->source by following predecessors; reverse to source->sink.
+    """Rebuild sink->source by following predecessors, then reverse to source->sink.
 
-    Returns None if the chain dead-ends (predecessor -1) before reaching the source -
-    i.e. the sink is unreachable. cuGraph marks unreachable vertices with a large FINITE
-    sentinel distance (not inf) + predecessor -1, so the distance check alone can miss
-    it; this catch prevents returning a bogus straight-through "route"."""
+    Returns None if the chain dead-ends (predecessor -1) before reaching the source, i.e.
+    the sink is unreachable. cuGraph marks unreachable vertices with a large but finite
+    sentinel distance rather than inf, plus predecessor -1, so a distance check alone can
+    miss them and a bogus straight-through "route" comes back.
+    """
     path = []
     node = int(sink_id)
     while node != -1 and node != source_id:

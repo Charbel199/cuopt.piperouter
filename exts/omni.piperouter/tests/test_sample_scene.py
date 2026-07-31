@@ -56,7 +56,7 @@ def test_markers_and_tags_present():
     tags = scene_ops.read_thermal_em_tags(s)
     assert any(t is not None for (_p, t, _e, _c) in tags)   # hot engine block
     assert any(e is not None for (_p, _t, e, _c) in tags)   # EM component
-    # the hot source must sit at the block (away from origin), not at (0,0,0)
+    # The hot source sits at the block, away from the origin.
     hot = [(p, t) for (p, t, _e, _c) in tags if t is not None][0]
     assert np.linalg.norm(hot[0]) > 1.0
 
@@ -90,7 +90,7 @@ def test_sample_scene_thermal_field_is_hot_near_block():
     gbmin, cell, res, occ, sd, thermal, em = session.compute_grids(s, resolution=48)
     assert thermal.max() > 30.0          # heat is actually present (ambient is 20°C)
     assert em.max() > 0.0                # EM source present too
-    # the hottest cell sits near the (scaled) engine-block centre, NOT the origin
+    # The hottest cell sits near the scaled engine-block centre, not at the origin.
     hot = np.array(np.unravel_index(np.argmax(thermal), thermal.shape))
     hot_world = gbmin + (hot + 0.5) * cell
     block_center_xy = np.array([0.55, 0.50]) * sample_scene.SCALE
@@ -132,9 +132,9 @@ def test_complex_scene_routes_through_solver(solver_server):
     results, bom = session.route_all(s, "cplx", wires)
     routed = sum(1 for r in results if r["status"] == "routed")
     failed = [r for r in results if r["status"] != "routed"]
-    # MOST wires route. With the strict no-corner-cutting rule a busy bay leaves a few
-    # genuinely tight diagonal corridors unroutable at this resolution - that's correct,
-    # and each such failure must carry an explanatory reason.
+    # Most wires route. The no-corner-cutting rule legitimately leaves a few tight
+    # diagonal corridors unroutable in a bay this busy at this resolution, and every
+    # such failure must carry a reason.
     assert routed >= len(descriptors) - 4
     assert all(r.get("reason") for r in failed)
     assert any(b["cost"] > 0 for b in bom)

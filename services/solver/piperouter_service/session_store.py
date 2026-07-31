@@ -14,16 +14,18 @@ def _check_session_id(session_id: str) -> None:
 
 
 class FilesystemSessionStore:
-    """Grids live on a shared dir (typically tmpfs/`/dev/shm`) so the extension
-    writes them once and the solver container reads them by handle. Only the
-    session_id crosses the HTTP boundary, never the arrays."""
+    """Hand grid stacks to the solver through a shared directory.
+
+    Grids live on a shared dir, typically tmpfs (`/dev/shm`): the extension writes
+    them once and the solver container reads them back by handle, so only the
+    session_id crosses the HTTP boundary, never the arrays.
+    """
 
     def __init__(self, root: str | Path = DEFAULT_ROOT):
         self.root = Path(root)
-        # session_id -> (mtime_ns, size, GridStack). Re-voxelizing rewrites the file
-        # (new mtime) so a stale hit is impossible; a hit also carries over every
-        # per-stack lazy cache (scene octree, dilations, normalized cost fields),
-        # which is most of the win on repeat solves of the same scene.
+        # session_id -> (mtime_ns, size, GridStack). Re-voxelizing rewrites the file,
+        # so a stale hit is impossible. A hit also carries over the per-stack lazy
+        # caches: scene octree, dilations, normalized cost fields.
         self._cache: dict[str, tuple[int, int, GridStack]] = {}
 
     def grid_path(self, session_id: str) -> Path:

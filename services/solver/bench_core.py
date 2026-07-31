@@ -1,8 +1,8 @@
-"""Core-pipeline benchmark: where does the time go, and how does it scale?
+"""Core-pipeline benchmark: where the time goes, and how it scales.
 
-Times each stage (voxelize -> lattice build -> SSSP -> smoothing) for one representative
-wire on the complex demo scene, across grid resolutions x connectivities, and reports the
-expanded-graph size (nodes/edges) so we can see what drives cost.
+Times each stage (voxelize, lattice build, SSSP, smoothing) for one representative wire
+on the complex demo scene across grid resolutions x connectivities, and reports the
+expanded-graph size in nodes and edges alongside it.
 
 Run:  PYTHONPATH=services/solver python3 services/solver/bench_core.py
 """
@@ -41,7 +41,7 @@ def main():
     descr = sample_scene.build_complex_scene(stage)   # cm scene, ~15 obstacles
     sess = RouterSession()
     types = wire_library.load_wire_library()
-    # a long diagonal wire that genuinely has to thread the bay
+    # A long diagonal wire, one that has to thread the bay.
     d = descr[0]
     spec = wire_library.as_spec(wire_library.by_id(types, d["type_id"]))
     wire = _wire_from_spec(spec)

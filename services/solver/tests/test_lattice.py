@@ -51,7 +51,7 @@ def test_bend_weight_scales_turn_penalty(empty_stack):
                  start_cell=(0, 5, 1), goal_cell=(9, 5, 1), extra_obstacles=None)
     g4 = b.build(empty_stack, wire, weights={"bend": 4.0}, connectivity=26,
                  start_cell=(0, 5, 1), goal_cell=(9, 5, 1), extra_obstacles=None)
-    # bend=0 removes all turn cost; bend=4 makes the costliest turn edges much heavier
+    # bend=0 removes all turn cost, so any bend weight lifts the costliest turn edges
     assert g4.weight.max() > g0.weight.max()
 
 

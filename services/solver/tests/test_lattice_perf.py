@@ -38,7 +38,7 @@ def test_vectorized_build_scales_to_24cubed_26conn():
     elapsed = time.perf_counter() - t0
     # 24^3 free cells * 26 headings + 2 virtual nodes
     assert g.n_nodes == 24 ** 3 * 26 + 2
-    assert g.src.size > 1_000_000          # real edge volume, built vectorized
+    assert g.src.size > 1_000_000          # a realistic edge volume, not a trivial graph
     assert g.src.shape == g.dst.shape == g.weight.shape
-    # vectorized build must be fast; the old python-loop builder took ~minutes here
+    # the build must stay vectorized; a per-edge Python loop blows well past this bound
     assert elapsed < 10.0, f"lattice build too slow: {elapsed:.1f}s"

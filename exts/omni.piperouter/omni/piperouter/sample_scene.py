@@ -1,5 +1,8 @@
-"""Procedural mini engine-bay sample scene + pre-placed wires, so the expert can
-hit Route All immediately. pxr-only (headless-testable)."""
+"""Procedural engine-bay sample scenes with pre-placed wires.
+
+Gives a new user something to hit Route All on immediately. Uses pxr only, so it can be
+built headless.
+"""
 from __future__ import annotations
 
 from pxr import UsdGeom
@@ -8,19 +11,19 @@ from . import scene_ops
 
 SAMPLE_ROOT = "/World/Sample"
 
-# Author in Omniverse-native CENTIMETRES (metersPerUnit = 0.01) so imported cm assets
-# compose 1:1 in the viewport. SCALE / COMPLEX_SCALE are physical sizes in METRES; _M2U
-# converts metres -> stage units (cm). The routing pipeline reads metersPerUnit and
-# converts back to metres for the solver, so nothing downstream changes.
+# Authored in centimetres (metersPerUnit = 0.01), Omniverse's native unit, so imported
+# cm assets compose 1:1 in the viewport. SCALE and COMPLEX_SCALE are physical sizes in
+# metres and _M2U converts metres to stage units. The routing pipeline reads
+# metersPerUnit and converts back to metres for the solver.
 METERS_PER_UNIT = 0.01
 _M2U = 1.0 / METERS_PER_UNIT  # 100 stage units per metre
 
-# Overall size of the sample bay (physical metres). Bump this to make it bigger.
+# Overall size of the sample bay, in metres.
 SCALE = 4.0
-MARKER_RADIUS = 0.012 * SCALE * _M2U  # draggable markers, sized to the scene (small)
+MARKER_RADIUS = 0.012 * SCALE * _M2U  # draggable markers, sized to the scene
 
-# Base (unit) layout, scaled by SCALE on build. Each descriptor: name (unique route
-# id), wire-type id, and world endpoints.
+# Base layout in unit coordinates, multiplied by SCALE on build. Each descriptor holds
+# a name (which doubles as the route id), a wire-type id, and the two world endpoints.
 SAMPLE_WIRES = [
     {"name": "power_0", "type_id": "pwr_4awg",  "start": (0.1, 0.2, 0.35), "end": (1.9, 0.2, 0.30)},
     {"name": "signal_1", "type_id": "sig_can",  "start": (0.1, 0.8, 0.45), "end": (1.9, 0.5, 0.20)},
@@ -39,30 +42,30 @@ def _clear(stage, path):
 
 
 def build_sample_scene(stage):
-    """Build /World/Sample + start/end markers; return the wire descriptors (with
-    scaled world coords). Idempotent: clears any prior sample, markers, routes first."""
+    """Build /World/Sample with start/end markers and return the wire descriptors.
+
+    Descriptor coordinates are already scaled to world space. Idempotent: any previous
+    sample, markers and routes are cleared first.
+    """
     for p in (SAMPLE_ROOT, scene_ops.MARKERS_SCOPE, scene_ops.ROUTES_SCOPE,
               scene_ops.DEBUG_SCOPE):
         _clear(stage, p)
 
     UsdGeom.Xform.Define(stage, "/World")
-    # Centimetres - Omniverse's native unit - so imported cm assets line up 1:1.
-    # Geometry is authored at SCALE metres * 100 units/m; the routing pipeline reads
-    # this metersPerUnit and converts back to metres for the solver.
+    # Centimetres, Omniverse's native unit, so imported cm assets line up 1:1. Geometry
+    # is authored at SCALE metres times 100 units per metre.
     UsdGeom.SetStageMetersPerUnit(stage, METERS_PER_UNIT)
     UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.y)
     UsdGeom.Scope.Define(stage, SAMPLE_ROOT)
 
     box = scene_ops.author_box_mesh
-    # ground plane
     box(stage, SAMPLE_ROOT + "/ground", _s((1.0, 0.5, -0.05)), _s((2.2, 1.2, 0.05)), (0.30, 0.30, 0.32))
-    # firewall: two boxes leaving a routing gap at mid-y
+    # Firewall as two boxes, leaving a routing gap at mid-y.
     box(stage, SAMPLE_ROOT + "/firewall_a", _s((1.0, 0.2, 0.30)), _s((0.12, 0.40, 0.60)), (0.50, 0.50, 0.55))
     box(stage, SAMPLE_ROOT + "/firewall_b", _s((1.0, 0.8, 0.30)), _s((0.12, 0.40, 0.60)), (0.50, 0.50, 0.55))
-    # hot engine block
     eb = box(stage, SAMPLE_ROOT + "/engine_block", _s((0.55, 0.50, 0.25)), _s((0.50, 0.50, 0.50)), (0.60, 0.30, 0.20))
     scene_ops.write_tags(eb.GetPrim(), temp_c=120.0)
-    # components - one is an EM source
+    # comp_a doubles as an EM source.
     ca = box(stage, SAMPLE_ROOT + "/comp_a", _s((1.50, 0.80, 0.20)), _s((0.30, 0.25, 0.40)), (0.25, 0.40, 0.60))
     scene_ops.write_tags(ca.GetPrim(), em=0.8)
     box(stage, SAMPLE_ROOT + "/comp_b", _s((1.60, 0.25, 0.20)), _s((0.30, 0.30, 0.40)), (0.30, 0.50, 0.40))
@@ -79,18 +82,18 @@ def build_sample_scene(stage):
 
 
 # ----------------------------------------------------------------- complex scene
-# A much fuller engine-bay + chassis: ~15 obstacles (engine, exhaust, transmission,
-# radiator, battery, ECUs, ABS, firewall halves, chassis rails) with thermal/EM
-# sources, and 14 wires/pipes spanning the bay using ALL wire + tube types. Built
-# under the SAME root as the sample scene, so the two buttons swap cleanly.
-# Physical size in METRES per base-layout unit. The base layout is ~3.4 units wide, so
-# COMPLEX_SCALE = 1.5 -> a ~5 m vehicle-front footprint (realistic; was 6.0 = ~20 m). This
-# is about the smallest that still lets the stiff pipes route through the tight corridors:
-# shrinking further makes the fixed physical bend radii too large for the gaps and several
-# pipes can no longer route (verified - at 1.2 only 9/14 route).
+# A fuller engine bay and chassis: around 15 obstacles (engine, exhaust, transmission,
+# radiator, battery, ECUs, ABS, firewall halves, chassis rails) carrying thermal and EM
+# tags, plus 14 wires and pipes spanning the bay across every wire and tube type. It is
+# built under the same root as the sample scene so the two buttons swap cleanly.
+#
+# Metres per base-layout unit. The layout is about 3.4 units wide, so 1.5 gives a
+# roughly 5 m vehicle-front footprint. It is also about as small as the scene can get:
+# bend radii are fixed physical sizes, so shrinking further makes the stiff pipes unable
+# to turn inside the corridors and several stop routing.
 COMPLEX_SCALE = 1.5
 
-# (name, center, size, color, temp_c, em) - base units (×COMPLEX_SCALE on build).
+# (name, center, size, color, temp_c, em) in base units, scaled by COMPLEX_SCALE.
 COMPLEX_BOXES = [
     ("ground",         (1.50, 1.00, -0.05), (3.40, 2.40, 0.05), (0.30, 0.30, 0.32), None, None),
     ("engine_block",   (0.60, 1.00, 0.30),  (0.60, 0.70, 0.60), (0.55, 0.30, 0.20), 120.0, None),
@@ -109,7 +112,7 @@ COMPLEX_BOXES = [
     ("chassis_rail_r", (1.50, 1.75, 0.10),  (3.00, 0.12, 0.12), (0.40, 0.40, 0.42), None, None),
 ]
 
-# (name, wire-type id, start, end) - base units.
+# (name, wire-type id, start, end) in base units.
 COMPLEX_WIRES = [
     ("batt_pwr_0",     "pwr_4awg",        (0.30, 1.60, 0.45), (1.95, 1.58, 0.45)),
     ("starter_pwr_1",  "pwr_4awg",        (0.40, 1.25, 0.65), (1.00, 1.05, 0.65)),
@@ -129,15 +132,17 @@ COMPLEX_WIRES = [
 
 
 def build_complex_scene(stage):
-    """Build a large engine-bay + chassis under SAMPLE_ROOT with many obstacles,
-    thermal/EM sources, and 14 wires/pipes (all types). Returns wire descriptors
-    (scaled world coords). Idempotent and replaces any prior sample/complex scene."""
+    """Build the large engine-bay and chassis scene under SAMPLE_ROOT.
+
+    Returns wire descriptors in scaled world coordinates. Idempotent: it replaces any
+    previous sample or complex scene.
+    """
     for p in (SAMPLE_ROOT, scene_ops.MARKERS_SCOPE, scene_ops.ROUTES_SCOPE,
               scene_ops.DEBUG_SCOPE):
         _clear(stage, p)
 
     UsdGeom.Xform.Define(stage, "/World")
-    # Centimetres (see build_sample_scene) - native Omniverse unit.
+    # Centimetres, as in build_sample_scene.
     UsdGeom.SetStageMetersPerUnit(stage, METERS_PER_UNIT)
     UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.y)
     UsdGeom.Scope.Define(stage, SAMPLE_ROOT)

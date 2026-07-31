@@ -1,3 +1,11 @@
+# Fixtures shared by the extension tests.
+#
+# The suite covers the extension's Kit-independent modules (USD scene ops, voxelizer,
+# grid IO, solver client) and imports nothing from omni.kit or omni.ui, so it runs
+# without a Kit runtime. Dependencies are the real thing rather than mocks: an
+# in-memory Usd.Stage and the actual solver service over HTTP, so a schema or wire
+# format change on either side shows up here as a failure.
+
 import socket
 import threading
 import time
@@ -54,7 +62,11 @@ def _free_port():
 
 @pytest.fixture
 def solver_server(tmp_path):
-    """A real M2 uvicorn server in a background thread, sharing a grid dir."""
+    """Run the solver service on a background thread; yield (base_url, grid_dir).
+
+    The extension writes grid .npz files into grid_dir and the service reads them
+    back from the same path, so both sides must be given one shared directory.
+    """
     import uvicorn
     from piperouter_service.app import app_factory
     from piperouter_service.session_store import FilesystemSessionStore
@@ -69,7 +81,7 @@ def solver_server(tmp_path):
     th = threading.Thread(target=server.run, daemon=True)
     th.start()
     base = f"http://127.0.0.1:{port}"
-    for _ in range(100):
+    for _ in range(100):   # wait up to ~10 s for the port to start answering
         try:
             urllib.request.urlopen(base + "/health", timeout=1)
             break

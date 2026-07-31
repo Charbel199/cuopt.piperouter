@@ -1,4 +1,13 @@
-"""Host part: voxelization benchmark (Warp CUDA vs CPU) + grid/bench-data prep."""
+"""Host half of the GPU-vs-CPU benchmark: voxelization timings and bench-data prep.
+
+Times Warp voxelization on CUDA against CPU at each resolution, then writes the grids and
+the bench.json that bench_gpu_vs_cpu_stages.py consumes inside the container.
+
+The scene must be a saved routing session (markers and wire settings authored by the
+extension), since the benchmark reuses its wires and their weights.
+
+Run from the repo root:  python3 services/solver/bench_gpu_vs_cpu_host.py <scene.usd>
+"""
 import json, sys, time
 import numpy as np
 from pxr import Usd, UsdGeom
@@ -7,8 +16,10 @@ sys.path.insert(0, "services/solver")
 from piperouter import grid_io, headings, scene_ops, session_io, voxelizer, wire_library
 from piperouter.router_session import RouterSession
 
-USD = "/home/cboumaroun/Downloads/part/engine_simplified/engine_demo.usd"
-RESOLUTIONS = [120, 180, 250]
+if len(sys.argv) < 2:
+    sys.exit(__doc__.strip().splitlines()[-1])
+USD = sys.argv[1]
+RESOLUTIONS = [int(r) for r in sys.argv[2:]] or [120, 180, 250]
 
 stage = Usd.Stage.Open(USD)
 mpu = float(UsdGeom.GetStageMetersPerUnit(stage))
@@ -36,7 +47,7 @@ json.dump({"wires": wires, "clearance_m": 0.0},
           open("/dev/shm/piperouter/bench.json", "w"))
 print(f"bench.json written: {len(wires)} wires")
 
-# ---- mesh soup once
+# ---- mesh soup, collected once
 prims = scene_ops.list_collidable_meshes(stage)
 bounds = scene_ops.compute_bounds(stage, prims)
 bmin, bmax = np.asarray(bounds[0]) * mpu, np.asarray(bounds[1]) * mpu
@@ -68,7 +79,7 @@ for res in RESOLUTIONS:
                 "cell_mm": cell * 1000}
     print(f"res {res}: grid {rxyz} ({ncells/1e6:.1f}M cells, {cell*1000:.1f} mm) "
           f"voxelize cuda {row['cuda:0']*1e3:.0f} ms vs cpu {row['cpu']*1e3:.0f} ms")
-    # authentic full grids (incl. fields) for the container stage
+    # Full grids, cost fields included, for the container-side stage.
     sess = RouterSession(grid_dir="/dev/shm/piperouter", solver_url="http://localhost:8000")
     sess.voxelize_scene(stage, f"bench_r{res}", resolution=res)
 json.dump(vox, open("/dev/shm/piperouter/bench_vox.json", "w"))

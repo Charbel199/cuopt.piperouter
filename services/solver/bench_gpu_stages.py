@@ -1,5 +1,6 @@
-"""Profile the lattice's GPU stages - edge-build (cupy) vs SSSP (cuGraph) - per wire, so
-we can see where a GPU win would have to come from. Solver-only (runs in the container).
+"""Split the lattice's per-wire GPU time between edge build (cupy) and SSSP (cuGraph).
+
+Solver-only, so it runs inside the container.
 
     PIPEROUTER_GPU_BUILD=1 python3 bench_gpu_stages.py <grid.npz> <endpoints.json>
 """
@@ -32,7 +33,7 @@ def main():
     _backend()
     b = ExpandedLatticeBuilder()
 
-    # warmup so cupy/cuGraph JIT + first-alloc don't pollute the timings
+    # Warm up, so cupy/cuGraph JIT and the first allocation stay out of the timings.
     e = eps[0]
     w = WireType(**e["wire"])
     g = b.build(stack, w, WEIGHTS, CONN, tuple(e["start"]), tuple(e["end"]), None, clearance_m=0.0)

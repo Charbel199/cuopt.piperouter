@@ -19,14 +19,14 @@ def test_marker_direction_round_trip():
         ax = scene_ops.get_world_axis(stage, path)
         dn = np.asarray(d, float) / np.linalg.norm(d)
         assert ax is not None and np.allclose(ax, dn, atol=1e-5)
-    # the arrow child exists while shown, is removed when hidden
+    # The arrow child exists while shown and is removed when hidden.
     assert stage.GetPrimAtPath(f"{path}/dir").IsValid()
     scene_ops.set_marker_direction(stage, path, None, show=False)
     assert not stage.GetPrimAtPath(f"{path}/dir").IsValid()
 
 
 def test_angles_through_marker_match_solver_vector():
-    # panel flow: angles -> aim marker -> read world axis (what the solver receives)
+    # Panel flow: angles -> aim marker -> read world axis, which is what the solver gets.
     stage, path = _stage_with_marker()
     v = headings.angles_to_vector(35.0, 20.0, "Z")
     scene_ops.set_marker_direction(stage, path, v, show=True)

@@ -18,7 +18,7 @@ def test_dilate_mask_grows_by_iterations():
 
 
 def test_npz_is_loadable_by_solver_gridstack(tmp_path):
-    # the extension writes the grid; the solver package must read it unchanged
+    # The extension writes the grid; the solver package must read it back unchanged.
     from piperouter_solver.grids import GridStack
 
     bmin, cell, res = grid_io.frame_from_bounds([0, 0, 0], [1, 1, 1], 5)

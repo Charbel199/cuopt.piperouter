@@ -1,20 +1,17 @@
-"""Pure BOM (bill-of-materials) summarization (omni-free, headless-testable).
+"""Bill-of-materials summarization for the panel's Output/BOM table.
 
-Turns the solver's per-route BOM rows into table rows + totals for the panel's
-Output / BOM table. Only successfully-routed wires contribute to the totals.
+Omni-free so it can be tested without Kit. Only successfully routed wires
+contribute to the totals.
 """
 from __future__ import annotations
 
 
 def summarize(bom, type_labels=None):
-    """Aggregate BOM rows into table rows + totals.
+    """Aggregate solver BOM rows into table rows plus totals.
 
-    bom: list of dicts {wire_id, status, length_m, cost, mass}.
-    type_labels: optional {wire_id: type_label} for the Type column.
-
-    Returns {rows, total_cost, total_mass, total_length, n_routed, n_no_path}.
-    Each row: {wire_id, type, length_m, mass, cost, status}. No-path wires appear
-    as rows (status != "routed") but contribute 0 to the totals.
+    `bom` holds dicts of {wire_id, status, length_m, cost, mass}; `type_labels`
+    optionally maps wire_id to the label shown in the Type column. Wires whose
+    status is not "routed" still get a row but contribute zero to the totals.
     """
     type_labels = type_labels or {}
     rows = []

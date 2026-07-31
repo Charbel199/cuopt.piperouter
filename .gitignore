@@ -36,5 +36,5 @@ node_modules/
 # Logs
 *.log
 
-# Internal design/plan working docs (agent-authored, local-only)
+# Local-only design/planning notes
 docs/superpowers/

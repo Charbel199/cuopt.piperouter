@@ -1,17 +1,17 @@
-"""Serialize / deserialize a PipeRouter panel session to a plain JSON-safe dict.
+"""Serialize and deserialize a panel session as a JSON-safe dict.
 
-omni-free and headless-testable. The dict is embedded in the USD stage (see
-scene_ops.write_session) so a single Save carries the WHOLE session: geometry,
-markers and route tubes live in the stage already; this captures the panel's logical
-state (wire/bundle definitions, weights, waypoint order, headings, settings).
+The dict is embedded in the USD stage (see scene_ops.write_session) so that one Save
+carries the whole session. Geometry, markers and route tubes already live in the
+stage; this captures the panel's logical state: wire/bundle definitions, weights,
+waypoint order, headings and settings.
 
-Only JSON-safe fields are kept - omni.ui widget handles stored on the live wire dicts
+Only JSON-safe fields survive. The omni.ui widget handles the live wire dicts carry
 (combo, name_model, _swatch) are dropped here and rebuilt when the panel redraws.
 """
 from __future__ import annotations
 
-# v2: octree_lattice became the default global planner. Sessions saved at v1 with
-# "lattice" recorded the OLD default, not a deliberate choice - the panel migrates them.
+# A v1 session recording "lattice" as its global planner may just have been taking the
+# default of the day rather than choosing it, so the panel migrates those on load.
 SCHEMA_VERSION = 2
 
 _WIRE_KEYS = (
@@ -31,7 +31,7 @@ def _pick(d, keys):
 
 
 def serialize(wires, bundles, settings, counters):
-    """Build the JSON-safe session dict from the panel's lists + scalar state."""
+    """Build the JSON-safe session dict from the panel's lists and scalar state."""
     return {
         "version": SCHEMA_VERSION,
         "settings": dict(settings),
@@ -42,8 +42,10 @@ def serialize(wires, bundles, settings, counters):
 
 
 def deserialize(data):
-    """(wires, bundles, settings, counters) from a session dict. Tolerant of missing keys
-    so older/partial files still load."""
+    """Return (wires, bundles, settings, counters) from a session dict.
+
+    Missing keys are tolerated so older or partial files still load.
+    """
     return (
         list(data.get("wires", [])),
         list(data.get("bundles", [])),

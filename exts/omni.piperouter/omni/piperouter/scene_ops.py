@@ -1,5 +1,8 @@
-"""USD stage I/O: collidable meshes, bounds, draggable markers, tube authoring, and
-thermal/EM tag read/write. pxr-only so it is testable headlessly with usd-core."""
+"""USD stage I/O.
+
+Collidable meshes, bounds, draggable markers, tube authoring and thermal/EM tag
+read/write. Uses pxr only, so it can be tested headless against usd-core.
+"""
 from __future__ import annotations
 
 import json
@@ -13,19 +16,21 @@ MARKERS_SCOPE = PIPEROUTER_ROOT + "/markers"
 DEBUG_SCOPE = PIPEROUTER_ROOT + "/debug"
 TEMP_ATTR = "piperouter:temp_c"
 EM_ATTR = "piperouter:em_strength"
-CLEARANCE_ATTR = "piperouter:clearance_m"   # per-object safety clearance (metres)
+CLEARANCE_ATTR = "piperouter:clearance_m"   # per-object safety clearance, in metres
 SESSION_KEY = "piperouterSession"   # customData key holding the embedded panel session
 
 
 def write_session(stage, data: dict):
-    """Embed the panel session dict (as JSON) in customData on the PipeRouter root prim,
-    so it travels with the stage on Save / usdz export."""
+    """Embed the panel session dict as JSON in customData on the PipeRouter root prim.
+
+    Storing it on the stage is what makes it travel with a Save or a usdz export.
+    """
     root = UsdGeom.Scope.Define(stage, PIPEROUTER_ROOT)
     root.GetPrim().SetCustomDataByKey(SESSION_KEY, json.dumps(data))
 
 
 def read_session(stage):
-    """Return the embedded session dict, or None if the stage has no PipeRouter session."""
+    """Return the embedded session dict, or None if the stage carries no session."""
     prim = stage.GetPrimAtPath(PIPEROUTER_ROOT)
     if not prim or not prim.IsValid():
         return None
@@ -39,22 +44,20 @@ def read_session(stage):
 
 
 def list_collidable_meshes(stage, exclude_prefixes=(PIPEROUTER_ROOT,)):
-    """Return all UsdGeom.Mesh prims outside the PipeRouter scope.
+    """Return every UsdGeom.Mesh prim outside the PipeRouter scope.
 
-    Handles drag-dropped USD assets (Xform payloads) which arrive as unloaded
-    payloads - grayed-out in the Stage panel. We force-load every unloaded prim
-    before traversing so their mesh contents become visible.
+    Two USD traversal traps are handled here. A drag-dropped asset arrives as an
+    unloaded payload, greyed out in the Stage panel, so every unloaded prim is loaded
+    before traversing or its meshes are invisible to us.
 
-    Also handles INSTANCED assets (CAD imports usually instance every repeated part:
-    the geometry lives once under /Prototypes and the scene holds instanceable
-    references to it - Omniverse shows those meshes greyed out as read-only instance
-    proxies). A plain stage.Traverse() skips inside instances entirely, so we traverse
-    with Usd.TraverseInstanceProxies() to see the proxy meshes. Their points (prototype
-    geometry) and world transforms (per-instance placement) read normally.
+    CAD imports also tend to instance every repeated part: the geometry lives once under
+    /Prototypes and the scene holds instanceable references to it, which Omniverse shows
+    as read-only instance proxies. A plain stage.Traverse() never descends into an
+    instance, so this uses Usd.TraverseInstanceProxies(). Proxy points (prototype
+    geometry) and world transforms (per-instance placement) then read normally.
     """
-    # Walk every prim (including unloaded payload roots) and explicitly load any
-    # that haven't been loaded yet. TraverseAll() visits inactive/unloaded roots
-    # that stage.Traverse() would skip.
+    # TraverseAll() reaches inactive and unloaded roots that stage.Traverse() skips,
+    # which is what lets the loop below load them.
     try:
         from pxr import Usd as _Usd
         for prim in stage.TraverseAll():
@@ -65,7 +68,7 @@ def list_collidable_meshes(stage, exclude_prefixes=(PIPEROUTER_ROOT,)):
                 except Exception:
                     pass
     except Exception:
-        # Fallback: blanket load everything under root
+        # Fall back to loading everything under the root.
         try:
             stage.Load("/")
         except Exception:
@@ -107,11 +110,14 @@ def compute_bounds(stage, prims):
 
 
 def spawn_marker(stage, path, position, color=(0.1, 0.9, 0.1), radius=0.03, opacity=1.0):
-    """A single draggable Sphere prim (no parent/child split) so the prim you move in
-    the viewport is exactly the one we read back. opacity < 1.0 makes it see-through
-    (e.g. waypoints, so they don't hide the geometry they sit on)."""
+    """Author a draggable marker as a single Sphere prim.
+
+    Deliberately one prim rather than a parent/child pair, so the prim the user moves in
+    the viewport is exactly the one read back. An opacity below 1.0 makes the marker
+    see-through, which keeps waypoints from hiding the geometry they sit on.
+    """
     sph = UsdGeom.Sphere.Define(stage, path)
-    # reuse the existing translate op if the marker already exists (e.g. on rebuild)
+    # Reuse the existing translate op when the marker is being rebuilt.
     xf = UsdGeom.Xformable(sph)
     ops = [o for o in xf.GetOrderedXformOps() if o.GetOpType() == UsdGeom.XformOp.TypeTranslate]
     op = ops[0] if ops else xf.AddTranslateOp()
@@ -124,12 +130,15 @@ def spawn_marker(stage, path, position, color=(0.1, 0.9, 0.1), radius=0.03, opac
 
 def spawn_waypoint_marker(stage, path, position, color=(0.1, 0.5, 0.9), radius=0.05,
                           segments=24):
-    """A see-through wireframe gizmo (three orthogonal rings) used for waypoints, so the
-    routed wire and the geometry behind it stay visible - unlike a solid sphere, and
-    unlike displayOpacity which the RTX viewport ignores without a translucent material.
+    """Author a waypoint gizmo as three orthogonal wireframe rings.
 
-    Draggable and readable exactly like spawn_marker: the translate op lives on the prim
-    itself, so marker_positions()/get_world_pos() pick it up unchanged."""
+    A wireframe keeps the routed wire and the geometry behind it visible, which a solid
+    sphere does not. displayOpacity is not an option here: the RTX viewport ignores it
+    without a translucent material.
+
+    The translate op lives on the prim itself, as in spawn_marker, so marker_positions()
+    and get_world_pos() read it unchanged.
+    """
     crv = UsdGeom.BasisCurves.Define(stage, path)
     xf = UsdGeom.Xformable(crv)
     ops = [o for o in xf.GetOrderedXformOps() if o.GetOpType() == UsdGeom.XformOp.TypeTranslate]
@@ -139,7 +148,7 @@ def spawn_waypoint_marker(stage, path, position, color=(0.1, 0.5, 0.9), radius=0
     r = float(radius)
     th = np.linspace(0.0, 2.0 * np.pi, int(segments), endpoint=False)
     pts = []
-    for ax in range(3):  # rings in the XY, XZ and YZ planes
+    for ax in range(3):  # one ring each in the XY, XZ and YZ planes
         for t in th:
             c, s = r * float(np.cos(t)), r * float(np.sin(t))
             if ax == 0:
@@ -169,9 +178,12 @@ def get_world_pos(stage, path):
 
 
 def get_world_axis(stage, path, local_axis=(1.0, 0.0, 0.0)):
-    """World-space unit vector of a prim's `local_axis` (rotation only, scale stripped).
-    Reads a marker's heading from how the user rotated it. None if the prim is missing
-    or the axis degenerates."""
+    """Return the world-space unit vector of a prim's `local_axis`, or None.
+
+    Rotation only, with scale stripped, which is how a marker's heading is read back
+    from the way the user rotated it. None means the prim is missing or the axis
+    degenerated.
+    """
     prim = stage.GetPrimAtPath(path)
     if not prim or not prim.IsValid():
         return None
@@ -188,8 +200,10 @@ def get_world_axis(stage, path, local_axis=(1.0, 0.0, 0.0)):
 
 
 def aim_quat(direction, local_axis=(1.0, 0.0, 0.0)):
-    """Quaternion rotating `local_axis` onto world `direction` (shortest arc), for
-    pointing a marker's heading arrow along a chosen vector."""
+    """Return the shortest-arc quaternion taking `local_axis` onto world `direction`.
+
+    Used to point a marker's heading arrow along a chosen vector.
+    """
     d = Gf.Vec3d(*[float(x) for x in direction])
     if d.GetLength() < 1e-9:
         return Gf.Quatf(1.0)
@@ -198,13 +212,16 @@ def aim_quat(direction, local_axis=(1.0, 0.0, 0.0)):
 
 
 def _author_heading_arrow(stage, path, length, color, incoming=False):
-    """An arrow along the parent's LOCAL +X (shaft + two head strokes) as a child prim,
-    so it inherits the marker's translate+orient - rotating the marker aims the arrow.
+    """Author an arrow (a shaft and two head strokes) along the parent's local +X.
 
-    incoming=False (START): drawn FROM the marker outward - "the cable leaves this way".
-    incoming=True  (END):   drawn approaching the marker with the tip AT it - "the cable
-    arrives along this arrow". Both point in local +X (the travel direction the solver
-    reads); only where the strokes sit relative to the marker differs."""
+    It is a child prim, so it inherits the marker's translate and orient and rotating
+    the marker aims the arrow.
+
+    A start marker (incoming=False) draws the arrow outward from the marker: the cable
+    leaves this way. An end marker (incoming=True) draws it approaching the marker with
+    the tip on it: the cable arrives along the arrow. Both point along local +X, the
+    travel direction the solver reads; only the placement of the strokes differs.
+    """
     crv = UsdGeom.BasisCurves.Define(stage, path)
     L = float(length)
     h = L * 0.25
@@ -228,12 +245,14 @@ def _author_heading_arrow(stage, path, length, color, incoming=False):
 
 def set_marker_direction(stage, path, direction=None, show=True,
                          color=(0.95, 0.8, 0.15), incoming=False):
-    """Show/aim a heading arrow on a start/end marker.
+    """Show or aim the heading arrow on a start or end marker.
 
-    Ensures the marker carries an xformOp:orient (so Kit's rotate manipulator can spin
-    it) and an arrow child at `{path}/dir` along local +X. `direction` (world vector)
-    re-aims the orient; None keeps the current rotation. show=False removes the arrow
-    (the orient op stays, harmless). Returns True if the marker exists."""
+    Guarantees the marker carries an xformOp:orient, without which Kit's rotate
+    manipulator cannot spin it, plus an arrow child at `{path}/dir` along local +X. A
+    world-vector `direction` re-aims the orient, while None keeps the current rotation.
+    show=False removes the arrow and leaves the orient op in place. Returns True when
+    the marker exists.
+    """
     prim = stage.GetPrimAtPath(path)
     if not prim or not prim.IsValid():
         return False
@@ -246,7 +265,7 @@ def set_marker_direction(stage, path, direction=None, show=True,
         op.Set(Gf.Quatf(1.0))
     arrow_path = f"{path}/dir"
     if show:
-        # arrow sized from the marker sphere so it reads at scene scale
+        # Size the arrow from the marker sphere so it reads at scene scale.
         r = 0.03
         try:
             attr = UsdGeom.Sphere(prim).GetRadiusAttr()
@@ -263,9 +282,11 @@ def set_marker_direction(stage, path, direction=None, show=True,
 
 
 def marker_positions(stage):
-    """World positions of every marker (start/end/waypoint) under MARKERS_SCOPE, so
-    the voxel grid can be framed to include them (markers dragged beyond the scene
-    geometry must still be inside the grid, or routing to them clamps to the edge)."""
+    """Return the world position of every marker under MARKERS_SCOPE.
+
+    The voxel grid is framed to include these. A marker dragged beyond the scene
+    geometry still has to fall inside the grid, or routing to it clamps at the edge.
+    """
     root = stage.GetPrimAtPath(MARKERS_SCOPE)
     if not root or not root.IsValid():
         return []
@@ -296,7 +317,7 @@ def clear_routes(stage):
 
 
 def set_all_routes_visible(stage):
-    """Make every authored route tube visible again (undo any debug-view hide)."""
+    """Make every authored route tube visible again, undoing any debug-view hide."""
     routes = stage.GetPrimAtPath(ROUTES_SCOPE)
     if not routes or not routes.IsValid():
         return
@@ -305,9 +326,10 @@ def set_all_routes_visible(stage):
 
 
 def hide_route(stage, wire_name):
-    """Hide a wire's final tube(s) so a per-wire debug view (cells, grid-vs-smooth,
-    cost terrain, bend heatmap) isn't occluded by the cable. Matches the wire's own
-    tube and any bundle branch segments (<name>_seg<i>)."""
+    """Hide a wire's final tubes so a per-wire debug view is not occluded by the cable.
+
+    Matches the wire's own tube and any bundle branch segments, named <name>_seg<i>.
+    """
     routes = stage.GetPrimAtPath(ROUTES_SCOPE)
     if not routes or not routes.IsValid():
         return
@@ -318,8 +340,10 @@ def hide_route(stage, wire_name):
 
 
 def author_box_mesh(stage, path, center, size, color=(0.5, 0.5, 0.5)):
-    """Author an axis-aligned box as a real UsdGeom.Mesh (the voxelizer collects
-    Meshes, not Cube prims). `size` is full extents."""
+    """Author an axis-aligned box as a real UsdGeom.Mesh, `size` being the full extents.
+
+    It has to be a Mesh: the voxelizer collects Meshes and ignores Cube prims.
+    """
     mesh = UsdGeom.Mesh.Define(stage, path)
     cx, cy, cz = (float(c) for c in center)
     hx, hy, hz = (float(s) / 2.0 for s in size)
@@ -345,9 +369,11 @@ _BOX_EDGES = ((0, 1), (1, 2), (2, 3), (3, 0), (4, 5), (5, 6), (6, 7), (7, 4),
 
 def author_box_wireframe(stage, path, boxes, colors=None, color=(0.3, 0.7, 1.0),
                          width=0.01):
-    """See-through wireframe boxes (12 edges each) as ONE BasisCurves - used to show the
-    octree leaves without occluding the scene. `boxes` = list of (min_xyz, max_xyz) in
-    STAGE units; `colors` (optional) = per-box RGB."""
+    """Author see-through wireframe boxes, 12 edges each, as one BasisCurves prim.
+
+    Used to show the octree leaves without occluding the scene. `boxes` is a list of
+    (min_xyz, max_xyz) in stage units, and the optional `colors` gives per-box RGB.
+    """
     crv = UsdGeom.BasisCurves.Define(stage, path)
     pts, counts, disp = [], [], []
     for bi, (mn, mx) in enumerate(boxes):
@@ -361,7 +387,7 @@ def author_box_wireframe(stage, path, boxes, colors=None, color=(0.3, 0.7, 1.0),
             pts.append(Gf.Vec3f(*corners[a]))
             pts.append(Gf.Vec3f(*corners[b]))
             counts.append(2)
-            disp.append(cv)               # one colour per edge (uniform interpolation)
+            disp.append(cv)               # one colour per edge, hence uniform below
     crv.GetPointsAttr().Set(pts)
     crv.GetCurveVertexCountsAttr().Set(counts)
     crv.GetTypeAttr().Set(UsdGeom.Tokens.linear)
@@ -375,16 +401,18 @@ def author_box_wireframe(stage, path, boxes, colors=None, color=(0.3, 0.7, 1.0),
 
 
 def _author_blob_cloud(stage, path, points, size, colors=None, color=(0.2, 0.6, 1.0)):
-    """Render a point cloud as short fat BasisCurves stubs - one tiny 2-vertex linear
-    curve (width = size) per point. We use curves, NOT UsdGeom.Points, because the RTX
-    viewport renders curves reliably while it routinely fails to draw Points at all
-    (that's why the debug dot-clouds were invisible). Per-point color is supported via
-    vertex-interpolated displayColor (2 verts per point)."""
+    """Render a point cloud as short fat BasisCurves stubs, one per point.
+
+    Each point becomes a two-vertex linear curve of width `size`. Curves rather than
+    UsdGeom.Points because the RTX viewport draws curves reliably and routinely fails to
+    draw Points at all. Per-point colour works through vertex-interpolated displayColor,
+    with two vertices per point.
+    """
     pts_in = [(float(p[0]), float(p[1]), float(p[2])) for p in points]
     n = len(pts_in)
     crv = UsdGeom.BasisCurves.Define(stage, path)
-    # Very short stub (length << width) so the round end-caps dominate and each point
-    # reads as a CIRCLE/sphere, not an elongated pill.
+    # Keeping the stub much shorter than it is wide lets the round end caps dominate, so
+    # each point reads as a sphere rather than an elongated pill.
     off = float(size) * 0.08
     verts = []
     for x, y, z in pts_in:
@@ -400,7 +428,7 @@ def _author_blob_cloud(stage, path, points, size, colors=None, color=(0.2, 0.6, 
         for c in colors:
             v = Gf.Vec3f(float(c[0]), float(c[1]), float(c[2]))
             col.append(v)
-            col.append(v)   # one color per vertex, 2 verts per point
+            col.append(v)   # one colour per vertex, two vertices per point
         crv.GetDisplayColorAttr().Set(col)
         crv.GetDisplayColorPrimvar().SetInterpolation(UsdGeom.Tokens.vertex)
     else:
@@ -410,19 +438,22 @@ def _author_blob_cloud(stage, path, points, size, colors=None, color=(0.2, 0.6, 
 
 
 def author_points(stage, path, points, size=0.01, color=(0.2, 0.6, 1.0)):
-    """A debug dot cloud (used for the occupancy overlay + per-wire cells)."""
+    """Author a debug dot cloud, as used by the occupancy overlay and per-wire cells."""
     return _author_blob_cloud(stage, path, points, size, colors=None, color=color)
 
 
 def author_colored_points(stage, path, points, colors, size=0.02):
-    """Like author_points but with a PER-POINT color, used for the thermal/EM/cost
-    debug clouds where each cell is tinted by its field value."""
+    """Author a dot cloud with a per-point colour.
+
+    Used by the thermal, EM and cost clouds, where each cell is tinted by its field
+    value.
+    """
     return _author_blob_cloud(stage, path, points, size, colors=colors)
 
 
 def author_wire_cells(stage, wire_name, cells, gbmin, cell_size, color=(0.8, 0.1, 0.1),
                       cap=100_000):
-    """Point cloud of the voxel cells the router claimed for this wire, in the wire's color."""
+    """Author a point cloud of the voxel cells the router claimed for this wire."""
     import numpy as np
     if not cells:
         return
@@ -435,8 +466,11 @@ def author_wire_cells(stage, wire_name, cells, gbmin, cell_size, color=(0.8, 0.1
 
 
 def author_raw_path(stage, wire_name, raw_polyline, color=(0.8, 0.8, 0.0), width=0.02):
-    """BasisCurves for the stair-stepped grid path BEFORE smoothing. width is in STAGE
-    units (callers scale by 1/metersPerUnit so it stays visible in cm/mm stages)."""
+    """Author the stair-stepped grid path as it is before smoothing.
+
+    `width` is in stage units; callers scale by 1/metersPerUnit so the curve stays
+    visible on centimetre and millimetre stages.
+    """
     if not raw_polyline or len(raw_polyline) < 2:
         return
     crv = UsdGeom.BasisCurves.Define(stage, f"{DEBUG_SCOPE}/raw_{wire_name}")
@@ -451,24 +485,27 @@ def author_raw_path(stage, wire_name, raw_polyline, color=(0.8, 0.8, 0.0), width
 
 def author_bend_heatmap(stage, wire_name, polyline, min_bend_radius_mm, cap=5_000,
                          pos_scale=1.0, width=None):
-    """BasisCurves coloured green/yellow/red by local curvature:
-       green = radius > 1.5× min_bend, yellow = 0.5-1.5×, red = below limit.
+    """Author the route as a curve coloured by local bend radius.
 
-    The polyline is in METERS (solver space) so the curvature physics is correct;
-    pos_scale converts the AUTHORED point positions back to stage units (1/metersPerUnit)
-    without disturbing the radius computation. width (STAGE units) sets the tube thickness -
-    pass the wire's real display diameter so the heatmap is to-scale (default ~legacy)."""
+    Green means a radius comfortably above min_bend, yellow near the limit, red below
+    it.
+
+    The polyline must be in metres, i.e. solver space, so the curvature comes out right.
+    `pos_scale` converts only the authored point positions back to stage units,
+    1/metersPerUnit, leaving the radius computation alone. `width` is in stage units;
+    pass the wire's real display diameter to keep the heatmap to scale.
+    """
     import numpy as np
     pts = [np.asarray(p, dtype=np.float64) for p in polyline]
     if len(pts) < 3:
         return
 
-    # Resample to a fixed step (one min-bend-radius) so curvature is measured over a
-    # CONSISTENT arc length instead of the grid cell size. Without this a sharp corner on
-    # a coarse grid spreads its turn over a big cell and reads as a gentle arc (big chord
-    # -> big implied radius) so it never flags red. Long segments get subdivided; original
-    # vertices (the actual corners) are preserved, and already-dense smooth paths are left
-    # as-is, so a real smooth curve still reads its true radius.
+    # Resample to a fixed step of one min-bend-radius so curvature is measured over a
+    # consistent arc length rather than over the grid cell size. Otherwise a sharp corner
+    # on a coarse grid spreads its turn across a big cell and reads as a gentle arc,
+    # since a big chord implies a big radius, and never flags red. Long segments are
+    # subdivided while the original vertices, which are the real corners, are kept;
+    # already-dense smooth paths pass through unchanged and keep their true radius.
     min_bend_m = max(float(min_bend_radius_mm) / 1000.0, 1e-4)
     ds = min_bend_m
     rs = [pts[0]]
@@ -485,10 +522,10 @@ def author_bend_heatmap(stage, wire_name, polyline, min_bend_radius_mm, cap=5_00
         return
 
     seg_colors = []
-    # compute curvature radius at each interior (resampled) vertex
+    # Curvature radius at each interior resampled vertex.
     for i in range(len(pts)):
         if i == 0 or i == len(pts) - 1:
-            seg_colors.append((0.1, 0.85, 0.1))   # endpoints default green
+            seg_colors.append((0.1, 0.85, 0.1))   # endpoints default to green
             continue
         a, b, c = pts[i - 1], pts[i], pts[i + 1]
         ab, bc = b - a, c - b
@@ -505,11 +542,11 @@ def author_bend_heatmap(stage, wire_name, polyline, min_bend_radius_mm, cap=5_00
             r_mm = (chord / (2.0 * np.sin(angle / 2.0))) * 1000.0
         ratio = r_mm / max(float(min_bend_radius_mm), 1.0)
         if ratio >= 1.5:
-            seg_colors.append((0.1, 0.85, 0.1))  # green - well within spec
+            seg_colors.append((0.1, 0.85, 0.1))  # green: well within spec
         elif ratio >= 0.8:
-            seg_colors.append((0.9, 0.7, 0.0))   # yellow - near limit
+            seg_colors.append((0.9, 0.7, 0.0))   # yellow: near the limit
         else:
-            seg_colors.append((0.95, 0.1, 0.1))  # red - violating min bend
+            seg_colors.append((0.95, 0.1, 0.1))  # red: below the minimum bend radius
 
     step = max(1, len(pts) // cap)
     pts_sub = pts[::step]
@@ -535,23 +572,19 @@ def clear_debug(stage):
 
 
 def read_thermal_em_tags(stage):
-    """Find every prim tagged with a temperature and/or EM strength, and report WHERE
-    it is and HOW BIG it is so the field builder can splat heat/EM from the right place.
+    """Return the position and size of every prim tagged with a temperature or EM value.
 
-    Returns: list of (center, temp_c|None, em|None, char_size) where
-        center    = WORLD bounding-box CENTRE of the tagged prim (3,) ndarray.
-        temp_c    = authored °C value, or None.
-        em        = authored EM strength, or None.
-        char_size = half the bbox diagonal, i.e. a characteristic radius of the object.
+    Each entry is (center, temp_c or None, em or None, char_size), where center is the
+    world bounding-box centre as a (3,) ndarray and char_size is half the bbox diagonal,
+    a characteristic radius the field builder uses as a falloff distance.
 
-    WHY the bbox centre and not the xform translation:
-        author_box_mesh() bakes geometry into world-space points with an IDENTITY
-        transform, so the prim's xform translation is (0,0,0). Using it would splat ALL
-        heat at the world origin instead of at the object. The world bbox centre is
-        correct whether the geometry is baked into points OR positioned by an xform.
+    The centre comes from the bounding box rather than the xform translation because
+    author_box_mesh() bakes geometry into world-space points under an identity
+    transform, leaving the prim's translation at the origin. The bbox centre is right
+    either way, whether the geometry is baked into points or placed by an xform.
     """
     out = []
-    # BBoxCache computes the world-space, axis-aligned bounds of a prim's geometry.
+    # BBoxCache computes world-space, axis-aligned bounds of a prim's geometry.
     bbox = UsdGeom.BBoxCache(Usd.TimeCode.Default(),
                              [UsdGeom.Tokens.default_, UsdGeom.Tokens.render])
     xform = UsdGeom.XformCache(Usd.TimeCode.Default())
@@ -565,8 +598,8 @@ def read_thermal_em_tags(stage):
 
         rng = bbox.ComputeWorldBound(prim).ComputeAlignedRange()
         if rng.IsEmpty():
-            # Prim has no geometry of its own (e.g. a bare Xform) - fall back to its
-            # world translation, with a zero characteristic size.
+            # No geometry of its own, as with a bare Xform, so fall back to the world
+            # translation and a zero characteristic size.
             tr = xform.GetLocalToWorldTransform(prim).ExtractTranslation()
             center = np.array([tr[0], tr[1], tr[2]], dtype=float)
             char_size = 0.0
@@ -582,8 +615,9 @@ def read_thermal_em_tags(stage):
                     float(e.Get()) if has_e else None,
                     char_size))
 
-    # instance-proxy tags (registry): stage.Traverse() above skips proxies, so there is
-    # no double-count. Reading proxies (bbox/xform) is allowed - only authoring isn't.
+    # Instance-proxy tags from the registry. The stage.Traverse() above skips proxies, so
+    # nothing is double-counted, and reading a proxy's bbox or xform is allowed; only
+    # authoring on one is not.
     for path, entry in read_proxy_tags(stage).items():
         if entry.get("temp_c") is None and entry.get("em") is None:
             continue
@@ -609,10 +643,13 @@ PROXY_TAGS_KEY = "piperouterProxyTags"   # customData: {proxy path -> {temp_c, e
 
 
 def read_proxy_tags(stage):
-    """Tags for INSTANCE-PROXY prims. USD forbids authoring attributes on proxies (their
-    geometry lives once in a shared prototype), so proxy tags are stored by PATH in
-    customData on the PipeRouter root - the tag applies to EXACTLY the selected prim,
-    not its parent/instance, and the same part in another instance stays untagged."""
+    """Return the tag registry for instance-proxy prims.
+
+    USD forbids authoring attributes on a proxy, since its geometry lives once in a
+    shared prototype, so these tags are keyed by path in customData on the PipeRouter
+    root. Keying by path means a tag applies to the selected prim alone, not to its
+    parent or its instance, and the same part in another instance stays untagged.
+    """
     prim = stage.GetPrimAtPath(PIPEROUTER_ROOT)
     if not prim or not prim.IsValid():
         return {}
@@ -654,8 +691,10 @@ def write_tags(prim, temp_c=None, em=None, clearance_m=None):
 
 
 def list_tagged_prims(stage):
-    """Every prim carrying a thermal / EM / clearance tag:
-    [{path, temp_c|None, em|None, clearance_m|None}]."""
+    """Return every prim carrying a thermal, EM or clearance tag.
+
+    Each entry is {path, temp_c, em, clearance_m}, with None for the absent tags.
+    """
     out = []
     for prim in stage.Traverse():
         t = prim.GetAttribute(TEMP_ATTR)
@@ -669,7 +708,7 @@ def list_tagged_prims(stage):
                         "temp_c": float(t.Get()) if has_t else None,
                         "em": float(e.Get()) if has_e else None,
                         "clearance_m": float(c.Get()) if has_c else None})
-    # instance-proxy tags live in the registry (skip entries whose prim disappeared)
+    # Instance-proxy tags live in the registry; skip entries whose prim has gone.
     for path, entry in read_proxy_tags(stage).items():
         prim = stage.GetPrimAtPath(path)
         if prim and prim.IsValid():
@@ -681,11 +720,15 @@ def list_tagged_prims(stage):
 
 
 def clearance_for_prim(prim, proxy_tags=None):
-    """Effective per-object clearance for a mesh: the CLEARANCE_ATTR authored on the
-    prim itself or its NEAREST tagged ancestor (users usually tag the component Xform,
-    whose meshes live below it), or - for instance proxies - the proxy-tag registry
-    entry for the prim's (or an ancestor's) exact path. None = untagged.
-    `proxy_tags`: pass read_proxy_tags(stage) when calling in a loop; None = read here."""
+    """Return the effective per-object clearance for a mesh, or None if untagged.
+
+    Takes CLEARANCE_ATTR from the prim itself or its nearest tagged ancestor, since
+    users usually tag the component Xform whose meshes sit below it. For instance
+    proxies it takes the registry entry matching the prim's own path or an ancestor's.
+
+    Pass `proxy_tags` from read_proxy_tags(stage) when calling in a loop; leaving it None
+    re-reads the registry on every call.
+    """
     if proxy_tags is None:
         try:
             proxy_tags = read_proxy_tags(prim.GetStage())
@@ -704,8 +747,10 @@ def clearance_for_prim(prim, proxy_tags=None):
 
 
 def clear_tags(prim):
-    """Remove the thermal/EM/clearance tags from a prim (instance proxies clear their
-    registry entry, mirroring write_tags)."""
+    """Remove the thermal, EM and clearance tags from a prim.
+
+    An instance proxy clears its registry entry instead, mirroring write_tags.
+    """
     if prim.IsInstanceProxy():
         stage = prim.GetStage()
         tags = read_proxy_tags(stage)

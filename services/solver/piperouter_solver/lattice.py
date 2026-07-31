@@ -8,12 +8,11 @@ import numpy as np
 
 
 def _edge_array_module():
-    """numpy by default; cupy when PIPEROUTER_GPU_BUILD=1 and cupy is importable.
+    """Return numpy, or cupy when PIPEROUTER_GPU_BUILD=1 and cupy is importable.
 
-    The expensive bulk edge assembly runs on this module: with cupy the ~tens-of-
-    millions of edges are built ON the GPU as cupy arrays, which cuGraph/cudf then
-    consume zero-copy (no host build, no CPU->GPU transfer). Falls back to numpy if
-    cupy isn't available, and the small per-cell masks stay on CPU regardless."""
+    Bulk edge assembly runs on this module. With cupy the edge arrays are built as device
+    arrays that cuGraph/cudf consume zero-copy, so there is no host build and no upload.
+    The small per-cell masks stay on the CPU either way."""
     if os.environ.get("PIPEROUTER_GPU_BUILD") == "1":
         try:
             import cupy as cp
@@ -24,17 +23,17 @@ def _edge_array_module():
 
 from .fields import melt_mask, neighbor_offsets, soft_cost_field, turn_penalty
 
-# Heading-pin cone: a pinned departure/arrival heading only admits neighbor
-# offsets whose unit direction is within this half-angle of the pinned vector.
-# The epsilon keeps offsets at EXACTLY 45 degrees inside the cone (a heading of e.g.
-# (0,1,0) vs the (1,1,0) diagonal dots to cos45 minus one float ulp and used to lose).
+# Heading-pin cone: a pinned departure/arrival heading admits only the neighbor offsets
+# whose unit direction lies within this half-angle of the pinned vector. The epsilon
+# keeps offsets at exactly 45 degrees inside the cone; e.g. a heading of (0,1,0) against
+# the (1,1,0) diagonal dots to cos45 short by an ulp and would otherwise be rejected.
 _HEADING_COS = float(np.cos(np.pi / 4.0)) - 1e-9  # 45 degrees
 
-# Alignment preference INSIDE the cone: admitted departure/arrival offsets pay
+# Alignment preference within the cone: an admitted departure/arrival offset pays
 # `_ALIGN_K * (1 - cos(angle to the pinned heading))` cells of extra cost, so the route
-# prefers the offset CLOSEST to the exact heading (e.g. a rotated gizmo arrow) instead of
-# treating everything within the cone as equally good. At the 45-degree cone edge this is
-# ~3.5 cells of penalty - decisive unless the aligned departure is genuinely costly.
+# takes the offset closest to the exact heading instead of treating everything inside the
+# cone as equally good. At the cone edge that is ~3.5 cells, decisive unless the aligned
+# departure is genuinely costly.
 _ALIGN_K = 12.0
 
 # 6-connectivity neighbour offsets (used for endpoint reachability / freeing).
@@ -44,13 +43,13 @@ _NB6 = ((1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1))
 def diagnose_no_path(stack, wire, connectivity, start_cell, goal_cell,
                      extra_obstacles=None, clearance_m=0.0,
                      start_heading=None, goal_heading=None):
-    """Explain WHY a leg has no path, using the SAME hard masks build() applies.
+    """Return a one-line human-readable reason why a leg has no path.
 
-    Mirrors how build() wires endpoints: the SOURCE links to free NEIGHBOURS of the
-    start cell (a pinned heading restricts which neighbours count), and the goal must
-    itself be free/freeable and approachable. So we classify, in order: start
-    unreachable -> start blocker; start free but heading kills it -> heading; same for
-    goal; otherwise 'no corridor'. Returns a one-line human-readable string."""
+    Uses the same hard masks build() applies, and mirrors how build() wires endpoints:
+    the source links to free neighbours of the start cell (a pinned heading restricts
+    which neighbours count) and the goal must itself be free or freeable, and
+    approachable. Classification order: start unreachable, start free but killed by its
+    heading, the same two for the goal, otherwise no corridor."""
     frame = stack.frame
     nx, ny, nz = frame.res_xyz
     melt = melt_mask(stack, wire)
@@ -79,8 +78,10 @@ def diagnose_no_path(stack, wire, connectivity, start_cell, goal_cell,
         return False
 
     def _neighbours(cell, heading, sign):
-        """(has_free, has_free_in_cone) over the start/goal cell's neighbours. sign=+1
-        for the start (departure offset), -1 for the goal (the cell it's entered FROM)."""
+        """Return (has_free, has_free_in_cone) over the cell's neighbours.
+
+        sign=+1 for the start, where the offset is the departure direction; sign=-1 for
+        the goal, where it points at the cell the goal is entered from."""
         c = np.asarray(cell, dtype=np.int64)
         hn = None
         if heading is not None:
@@ -98,7 +99,7 @@ def diagnose_no_path(stack, wire, connectivity, start_cell, goal_cell,
         return has_free, has_cone
 
     def _blocker(cell, label):
-        """Name the dominant hard blocker AT the cell or its nearest blocked neighbour."""
+        """Name the dominant hard blocker at the cell or at a neighbour of it."""
         c = tuple(int(v) for v in cell)
         cand = [c] + [tuple(int(v) for v in (np.asarray(c) + o)) for o in offs]
         cand = [x for x in cand if _inb(x)]
@@ -124,7 +125,7 @@ def diagnose_no_path(stack, wire, connectivity, start_cell, goal_cell,
         return ("Pinned start heading points straight into an obstacle. Clear that "
                 "direction or set the start heading to None.")
 
-    # --- goal: must itself be free/freeable AND approachable (cone if pinned) ---
+    # --- goal: must itself be free or freeable, and approachable (cone if pinned) ---
     g = tuple(int(v) for v in goal_cell)
     g_ok = (not blocked[g]) or (base[g] and _reachable(g))
     g_free, g_cone = _neighbours(goal_cell, goal_heading, -1)
@@ -134,8 +135,8 @@ def diagnose_no_path(stack, wire, connectivity, start_cell, goal_cell,
         return ("Pinned end heading points straight into an obstacle. Clear that "
                 "direction or set the end heading to None.")
 
-    # Endpoints are usable but the path is sealed. Name the DOMINANT blocker along the
-    # straight start->end line so 'no corridor' isn't a dead end (e.g. it's the heat).
+    # Endpoints are usable but the path is sealed. Name the dominant blocker along the
+    # straight start->end line so "no corridor" leaves the user something to act on.
     a = np.asarray(start_cell, dtype=np.float64)
     b = np.asarray(goal_cell, dtype=np.float64)
     steps = max(2, int(np.linalg.norm(b - a)) * 2)
@@ -182,8 +183,9 @@ class LatticeGraph:
     ordinal_cells: np.ndarray  # (n_free, 3) int32: cell ijk for each free-cell ordinal
 
     def cell_of(self, node_id: int) -> tuple[int, int, int]:
-        """Map a (cell x heading) node id back to its cell. Not valid for
-        source/sink ids (callers skip those)."""
+        """Map a (cell x heading) node id back to its cell.
+
+        Not valid for the source/sink ids; callers skip those."""
         c = self.ordinal_cells[node_id // self.heads]
         return (int(c[0]), int(c[1]), int(c[2]))
 
@@ -196,13 +198,13 @@ class LatticeBuilder(Protocol):
 
 
 class ExpandedLatticeBuilder:
-    """Option 1: full (cell x heading) state expansion (spec §5), vectorized.
+    """Full (cell x heading) state expansion.
 
-    State node = (free-cell ordinal) * H + heading_index, where heading_index is
-    the index of the offset by which the cell was *entered*. Turn cost between an
-    entry heading and an exit heading is path-dependent, which is why the heading
-    lives in the node. Edges, source links, and sink links are assembled with numpy
-    so the build scales to car-sized grids.
+    State node = (free-cell ordinal) * H + heading_index, where heading_index is the
+    index of the offset by which the cell was *entered*. The turn cost from an entry
+    heading to an exit heading is path-dependent, which is why the heading lives in the
+    node rather than being derived. Edges, source links and sink links are assembled with
+    array ops so the build scales to car-sized grids.
     """
 
     def build(
@@ -216,15 +218,15 @@ class ExpandedLatticeBuilder:
         H = len(offs)
 
         # --- hard constraints: forbidden cells ---
-        # Occupancy is grown by the wire's body radius PLUS the safety clearance, so
-        # the route keeps (radius + clearance) away from any mesh. clearance 0 keeps
-        # only the wire body out of meshes (it may run flush against a surface).
+        # Occupancy is grown by the wire's body radius plus the safety clearance, so the
+        # route keeps (radius + clearance) away from any mesh. With clearance 0 only the
+        # wire body is kept out, so it may run flush against a surface.
         clearance_m = float(clearance_m)
         extra = np.asarray(extra_obstacles, dtype=bool) if extra_obstacles is not None else None
         melt = melt_mask(stack, wire)
 
-        # `base` = blocked by the MESH itself (+ wire radius, melt, other routes).
-        # `blocked` additionally grows by the safety clearance.
+        # `base` is blocked by the mesh itself (plus wire radius, melt, other routes);
+        # `blocked` is `base` grown by the safety clearance as well.
         base = stack.dilate_occupancy(wire.radius_m).astype(bool) | melt
         if extra is not None:
             base |= extra
@@ -238,13 +240,11 @@ class ExpandedLatticeBuilder:
         start_cell = tuple(int(v) for v in start_cell)
         goal_cell = tuple(int(v) for v in goal_cell)
 
-        # Endpoints are fixed terminals. Free a blocked endpoint ONLY if it is blocked
-        # by the mesh AND is reachable from open space (a connector sitting ON a
-        # surface has at least one free neighbour). Do NOT free an endpoint that is:
-        #   - buried deep in solid / in an entirely-blocked scene (no free neighbour), or
-        #   - blocked only by the safety-clearance band (clearance too large here).
-        # Such endpoints stay blocked, so routing correctly returns no_path instead of
-        # inventing a path through solid geometry.
+        # Endpoints are fixed terminals. Free a blocked endpoint only when it is blocked
+        # by the mesh and is reachable from open space; a connector sitting on a surface
+        # has at least one free neighbour. An endpoint buried in solid (no free
+        # neighbour), or blocked only by the safety-clearance band, stays blocked so that
+        # routing returns no_path instead of inventing a path through solid geometry.
         free_base = ~base
         _NB6 = ((1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1))
 
@@ -260,14 +260,13 @@ class ExpandedLatticeBuilder:
             if not blocked[c]:
                 continue                      # already in free space
             if base[c] and _reachable(c):
-                blocked[c] = False            # connector on a surface -> connect to it
-            # else: buried in solid, or clearance-only -> leave blocked -> no_path
+                blocked[c] = False            # connector on a surface, so connect to it
+            # else: buried in solid, or clearance-only; leave blocked and report no_path
         free = ~blocked
 
         # --- compact free-cell ordinals (C-order, matching argwhere) ---
-        # Built directly on xp: on GPU this replaces the two biggest host costs of the
-        # build (a grid-sized int64 full+scatter and np.argwhere) AND the upload of the
-        # ordinal grid - only the (n_free, 3) coordinate list comes back to host.
+        # Built directly on xp, so on GPU builds the ordinal grid never leaves the device;
+        # only the (n_free, 3) coordinate list comes back to the host.
         xp = _edge_array_module()
         gpu_build = xp is not np
         free_x = xp.asarray(free) if gpu_build else free
@@ -281,8 +280,10 @@ class ExpandedLatticeBuilder:
             ordinal_cells = xp.asnumpy(ordinal_cells)
 
         def _ord_at(c):
-            """Cell ordinal at (i,j,k) - a scalar pull from the device on GPU builds,
-            used only for the handful of source/goal endpoint cells."""
+            """Cell ordinal at (i,j,k), or -1 if blocked.
+
+            On GPU builds this is a scalar pull from the device, so it is used only for
+            the handful of source/goal endpoint cells."""
             return int(cell_ord_x[c])
 
         source_id = n_free * H
@@ -293,13 +294,11 @@ class ExpandedLatticeBuilder:
         cell_mm = frame.cell_size * 1000.0
         step_len = frame.cell_size * np.sqrt((offs ** 2).sum(axis=1))  # (H,)
 
-        # turn-penalty lookup: turn_lut[h_in, h_out], scaled by the soft "bend" weight
-        # (0 = allow sharp turns, >1 = prefer straighter/gentler routes). Bend radius
-        # is intrinsic via the wire's min_bend_radius; this slider scales how hard we
-        # weigh it.
-        # Amplify the slider QUADRATICALLY so it has real bite: high values bend a LOT
-        # less. weight 1 -> 1x (default unchanged), 3 -> 9x, 5 -> 25x, 10 -> 100x; 0 still
-        # frees turns entirely. (Linear scaling barely moved the route even at the max.)
+        # Turn-penalty lookup turn_lut[h_in, h_out], scaled by the soft "bend" weight:
+        # 0 allows sharp turns, above 1 prefers straighter routes. The bend radius itself
+        # comes from the wire's min_bend_radius; this weight only scales how hard it is
+        # weighed. The scaling is quadratic so the slider has real range: 1 -> 1x,
+        # 3 -> 9x, 10 -> 100x, and 0 still frees turns entirely.
         bend_w = float(weights.get("bend", 1.0))
         bend_scale = bend_w * bend_w
         turn_lut = np.zeros((H, H), dtype=np.float64)
@@ -316,12 +315,11 @@ class ExpandedLatticeBuilder:
         dst_parts: list = []
         w_parts: list = []
 
-        # Edge assembly runs on `xp` (cupy on GPU, else numpy): free/cell_ord already
-        # live on the device (built there above); the soft field's device copy is
-        # cached on the stack per weights (it is reused by every wire sharing weights),
-        # so the only fresh upload per wire is the free mask. The huge bulk-edge arrays
-        # are produced ON the device and never round-trip to host. Source/sink edges
-        # are tiny -> kept on CPU (numpy).
+        # Edge assembly runs on `xp`. free/cell_ord already live on the device; the soft
+        # field's device copy is cached on the stack per weights and reused by every wire
+        # sharing them, so the only fresh upload per wire is the free mask. The bulk edge
+        # arrays are produced on the device and never round-trip to the host. Source and
+        # sink edges are few enough to stay on the CPU as numpy.
         if gpu_build:
             soft_dev = stack.__dict__.setdefault("_soft_dev_cache", {})
             soft_x = soft_dev.get(id(soft))
@@ -334,23 +332,23 @@ class ExpandedLatticeBuilder:
         turn_lut_x = xp.asarray(turn_lut) if gpu_build else turn_lut
         step_len_x = xp.asarray(step_len) if gpu_build else step_len
 
-        # No-corner-cutting: a diagonal step (a -> a+offset) may only be taken if the
-        # cells it squeezes BETWEEN are also free - otherwise the straight segment
-        # clips a solid edge/corner. The "between" cells are the proper non-empty
-        # sub-vectors of the offset (zero out some of its non-zero components). A face
-        # move (one non-zero component) has none, so it is never restricted.
+        # No corner cutting: a diagonal step (a -> a+offset) is legal only when the cells
+        # it squeezes between are free too, otherwise the straight segment clips a solid
+        # edge or corner. Those in-between cells are the proper non-empty sub-vectors of
+        # the offset, i.e. the offset with some of its non-zero components zeroed. A face
+        # move has none, so it is never restricted.
         def _intermediate_offsets(off):
             axes = [i for i in range(3) if off[i] != 0]
-            # RELAXED no-corner-cutting: only restrict 2D EDGE diagonals (two non-zero
-            # components) - require their two face cells free, which stops the obvious
-            # cube-edge clips. Full 3D corner moves (three non-zero) are left UNrestricted
-            # so the router still threads tight openings instead of over-detouring.
+            # Only 2D edge diagonals are restricted, by requiring their two face cells to
+            # be free, which stops the obvious cube-edge clips. Full 3D corner moves are
+            # left unrestricted so the router still threads tight openings instead of
+            # detouring around them.
             if len(axes) != 2:
                 return []
             return [tuple(int(off[ax]) if ax == a else 0 for ax in range(3)) for a in axes]
 
-        # --- bulk edges: every valid move (a -> b via offset oi), broadcast over
-        #     the H entry headings of a ---
+        # --- bulk edges: every valid move (a -> b via offset oi), broadcast over the H
+        #     entry headings of a ---
         for oi in range(H):
             dx, dy, dz = (int(offs[oi, 0]), int(offs[oi, 1]), int(offs[oi, 2]))
             sx0, sx1 = max(0, -dx), nx - max(0, dx)
@@ -361,7 +359,7 @@ class ExpandedLatticeBuilder:
             a_free = free_x[sx0:sx1, sy0:sy1, sz0:sz1]
             b_free = free_x[sx0 + dx:sx1 + dx, sy0 + dy:sy1 + dy, sz0 + dz:sz1 + dz]
             valid = a_free & b_free
-            # forbid corner-cutting: every in-between cell must be free too
+            # No corner cutting: every in-between cell must be free too.
             for ex, ey, ez in _intermediate_offsets((dx, dy, dz)):
                 valid = valid & free_x[sx0 + ex:sx1 + ex, sy0 + ey:sy1 + ey, sz0 + ez:sz1 + ez]
             if not bool(valid.any()):
@@ -371,11 +369,11 @@ class ExpandedLatticeBuilder:
             soft_b = soft_x[sx0 + dx:sx1 + dx, sy0 + dy:sy1 + dy, sz0 + dz:sz1 + dz][valid]
             base = step_len_x[oi] * (1.0 + soft_b.astype(xp.float64))  # (M,)
             m = a_ord.shape[0]
-            # each of the H entry headings of a -> the single dst node (b, oi)
+            # Each of the H entry headings of a -> the single dst node (b, oi).
             src_parts.append((a_ord.astype(xp.int64)[:, None] * H
                               + arange_h_x[None, :]).reshape(-1))
-            # int64 before *H: ordinals are int32 now and n_free*H can pass 2^31 on
-            # huge dense grids
+            # Widen to int64 before the *H: ordinals are int32 and n_free*H can exceed
+            # 2^31 on huge dense grids.
             dst_node = (b_ord.astype(xp.int64) * H + oi)[:, None]  # (M, 1)
             dst_parts.append(xp.broadcast_to(dst_node, (m, H)).reshape(-1))
             w_parts.append((base[:, None] + turn_lut_x[:, oi][None, :]).reshape(-1))
@@ -397,8 +395,10 @@ class ExpandedLatticeBuilder:
         allowed_goal = _cone_mask(goal_heading)
 
         def _align_pen(heading, oi):
-            """Extra cost (metres) for departing/arriving via offset oi when a heading is
-            pinned: 0 when perfectly aligned, growing with the angle inside the cone."""
+            """Extra cost in metres for departing or arriving via offset oi.
+
+            Zero when the offset is perfectly aligned with the pinned heading, growing
+            with the angle to it; zero as well when no heading is pinned."""
             if heading is None:
                 return 0.0
             h = np.asarray(heading, dtype=np.float64)
@@ -416,7 +416,7 @@ class ExpandedLatticeBuilder:
             ni, nj, nk = si + dx, sj + dy, sk + dz
             if not (0 <= ni < nx and 0 <= nj < ny and 0 <= nk < nz and free[ni, nj, nk]):
                 continue
-            # the start's first step must not corner-cut either
+            # The start's first step must not corner-cut either.
             cut = False
             for ex, ey, ez in _intermediate_offsets((dx, dy, dz)):
                 ci, cj, ck = si + ex, sj + ey, sk + ez
@@ -442,8 +442,8 @@ class ExpandedLatticeBuilder:
                                         dtype=np.float64))
 
         if src_parts:
-            # bulk parts are xp (device) arrays, source/sink parts are tiny numpy ones;
-            # xp.asarray unifies them (no-op on device, tiny transfer for the CPU ones).
+            # Bulk parts are device arrays and the source/sink parts are small numpy ones;
+            # xp.asarray unifies them, as a no-op for the former.
             src = xp.concatenate([xp.asarray(p) for p in src_parts]).astype(xp.int32)
             dst = xp.concatenate([xp.asarray(p) for p in dst_parts]).astype(xp.int32)
             weight = xp.concatenate([xp.asarray(p) for p in w_parts]).astype(xp.float32)

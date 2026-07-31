@@ -9,7 +9,7 @@ def test_serialize_drops_ui_handles_and_keeps_logic():
         "weights": {"bend": 3.0}, "waypoints": ["/m/w0_wp0"], "wp_slots": [1],
         "wp_counter": 1, "start_head_idx": 0, "end_head_idx": 0, "locked": True,
         "status": "routed", "length_m": 1.2, "cost": 3.4,
-        # UI handles that must NOT be serialized
+        # UI handles, which must not be serialized
         "combo": object(), "name_model": object(), "_swatch": object(),
     }]
     data = session_io.serialize(wires, [], {"resolution": 48}, {"key_counter": 1})

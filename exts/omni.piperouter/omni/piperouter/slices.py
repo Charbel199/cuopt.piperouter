@@ -1,22 +1,21 @@
-"""Render flattened 2D cross-section views (XY / XZ / YZ projections) of the voxel
-space, for the extension's debug panel. Pure numpy (headless-testable); the omni.ui
-side just pushes the returned RGBA buffers into image providers.
+"""Render flattened 2D cross-sections of the voxel space for the debug panel.
 
-Each view collapses the perpendicular axis so a single image shows ALL obstacles and
-the WHOLE route at once:
-  XY = top view (collapse Z), XZ = front view (collapse Y), YZ = side view (collapse X).
+Pure numpy, so it can be tested headless; the omni.ui side just pushes the returned
+RGBA buffers into image providers. Each view collapses one axis so a single image shows
+every obstacle and the full route at once: XY is the top view (collapse Z), XZ the front
+view (collapse Y), YZ the side view (collapse X).
 
 The obstacle/thermal/clearance background is the voxel grid upscaled to a high pixel
-resolution; the routes are then drawn as continuous lines (not per-voxel dots) so they
-stay crisp regardless of grid coarseness. Layers, back to front: light background ->
-thermal tint (warm = red) -> clearance halo (light grey) -> occupancy (dark grey) ->
-routes (wire color, start green / end red).
+resolution, while routes are drawn as continuous lines rather than per-voxel dots so
+they stay crisp however coarse the grid is. Layers, back to front: light background,
+thermal tint (warm = red), clearance halo (light grey), occupancy (dark grey), routes
+(wire color, with a green start and a red end).
 """
 from __future__ import annotations
 
 import numpy as np
 
-# plane name -> (collapsed_axis, horizontal_axis, vertical_axis)
+# Plane name to (collapsed_axis, horizontal_axis, vertical_axis).
 _PLANES = {"xy": (2, 0, 1), "xz": (1, 0, 2), "yz": (0, 1, 2)}
 
 _BG = (0.93, 0.93, 0.95)
@@ -54,8 +53,11 @@ def _line(img, r0, c0, r1, c1, color, thick):
 
 def render_views(bounds_min, cell_size, res_xyz, occ, thermal, routes,
                  ambient=20.0, target_px=720):
-    """Return {"xy","xz","yz"} -> RGBA uint8 array (H, W, 4) at ~target_px. `occ` is
-    the prohibited-voxel grid (mesh + baked safety clearance), shown as occupancy."""
+    """Return {"xy", "xz", "yz"} mapped to RGBA uint8 arrays (H, W, 4) near target_px.
+
+    `occ` is the prohibited-voxel grid, meaning mesh plus baked safety clearance, and is
+    drawn as occupancy.
+    """
     bounds_min = np.asarray(bounds_min, float)
     occ = occ.astype(bool)
     res = np.asarray(res_xyz, int)
@@ -76,13 +78,14 @@ def render_views(bounds_min, cell_size, res_xyz, occ, thermal, routes,
         base[warm] = (1.0 - t01[warm, None]) * np.array(_BG) + t01[warm, None] * np.array([1.0, 0.35, 0.2])
         base[occ2d] = _OCC
 
-        # orient to image space: rows = vertical axis (flipped so + is up), cols = horiz
+        # Orient to image space: rows are the vertical axis, flipped so + is up; columns
+        # are the horizontal axis.
         img0 = np.transpose(base, (1, 0, 2))[::-1]       # (vd, hd, 3)
         scale = max(1, int(round(target_px / max(vd, hd))))
         img = np.repeat(np.repeat(img0, scale, axis=0), scale, axis=1)
         ih, iw = img.shape[0], img.shape[1]
 
-        # draw routes as continuous lines at the high pixel resolution
+        # Routes are drawn at the upscaled pixel resolution, not the grid resolution.
         thick = max(1, scale // 3)
         for route in routes:
             color = np.asarray(route.get("color", (0.9, 0.1, 0.1)), float)

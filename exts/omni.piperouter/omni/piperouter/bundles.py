@@ -1,8 +1,8 @@
-"""Pure bundle helpers (omni-free, headless-testable).
+"""Bundle math and validation, kept omni-free so it can be tested without Kit.
 
-A bundle groups same-kind wires that share a routed trunk corridor (merge->split)
-then fan out as individual branches. This module contains only math and validation;
-all USD / routing calls live in router_session and panel.
+A bundle groups same-kind wires that share a routed trunk corridor (merge to split)
+then fan out as individual branches. USD and routing calls live in router_session and
+panel.
 """
 from __future__ import annotations
 
@@ -10,10 +10,10 @@ import math
 
 
 def bundle_diameter(outer_diameters_mm: list[float]) -> float:
-    """Circular-packing estimate: sqrt(sum of d^2).
+    """Estimate a bundle's outer diameter as sqrt(sum of d^2).
 
-    Gives the diameter of a circle whose area equals the sum of member areas -
-    a practical harness-sizing shortcut used in automotive design.
+    That is the diameter of a circle whose area equals the sum of the member areas, a
+    harness-sizing shortcut commonly used in automotive design.
     """
     if not outer_diameters_mm:
         raise ValueError("bundle_diameter requires at least one diameter")
@@ -21,10 +21,10 @@ def bundle_diameter(outer_diameters_mm: list[float]) -> float:
 
 
 def stitch_polylines(start_branch: list, trunk: list, end_branch: list) -> list:
-    """Concatenate start_branch + trunk + end_branch into one continuous polyline.
+    """Join start_branch, trunk and end_branch into one continuous polyline.
 
-    Deduplicates the junction points (last of start_branch == first of trunk, etc.)
-    so the result has no consecutive equal points. Each input is a list of [x,y,z].
+    Each input is a list of [x, y, z]. Junction points are deduplicated, so the result
+    never has two consecutive equal points.
     """
     def _as_list(p):
         return [float(p[0]), float(p[1]), float(p[2])]
@@ -42,11 +42,10 @@ def stitch_polylines(start_branch: list, trunk: list, end_branch: list) -> list:
 
 
 def validate_members(wires: list[dict], type_map: dict[str, dict]) -> tuple[bool, str]:
-    """Check that bundle members are valid.
+    """Check that bundle members are valid, returning (ok, error_message).
 
-    wires: wire dicts that share a bundle_id (at least 2 required).
-    type_map: {wire_name -> spec_dict with 'kind'}.
-    Returns (ok, error_message).
+    `wires` are the wire dicts sharing a bundle_id, of which at least two are required;
+    `type_map` maps wire name to a spec dict carrying 'kind'.
     """
     if len(wires) < 2:
         return False, "A bundle requires at least 2 member wires."
@@ -60,10 +59,10 @@ def validate_members(wires: list[dict], type_map: dict[str, dict]) -> tuple[bool
 def trunk_spec(member_specs: list[dict], bundle_id: str) -> dict:
     """Build a synthetic wire spec for the trunk route.
 
-    Uses the maximum min_bend_radius (stiffest member), minimum max_temp_c
-    (strictest thermal limit), and bundle_diameter for the outer diameter.
-    Cost/mass are set to 0 - the trunk BOM row is computed separately by summing
-    member costs over the trunk length.
+    Takes the maximum min_bend_radius (the stiffest member), the minimum max_temp_c
+    (the strictest thermal limit) and bundle_diameter for the outer diameter. Cost is
+    left at zero because the trunk BOM row is computed separately, by summing member
+    costs over the trunk length.
     """
     od = bundle_diameter([s["outer_diameter_mm"] for s in member_specs])
     return {

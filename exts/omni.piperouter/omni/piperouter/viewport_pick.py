@@ -1,11 +1,10 @@
-"""Double-click-in-viewport -> world point under the cursor, via the active viewport's
-pick query. Used to drop a waypoint exactly on the wire the user double-clicks.
+"""Turn a viewport double-click into the world point under the cursor.
 
-GUI / viewport-API dependent, so EVERY Kit call is guarded: if the viewport API is absent
-or differs, the picker silently does nothing (a [piperouter] warning is logged once).
-Mirrors the defensive style of viewport_labels.py. UNVERIFIED in a live GUI - the exact
-pick-query / gesture-payload API can vary across Kit builds; logging is verbose on purpose
-so a failure points at the offending step.
+Uses the active viewport's pick query, so a waypoint lands exactly on the geometry the
+user double-clicked. The pick-query and gesture-payload APIs vary across Kit builds, so
+every Kit call is guarded: if the API is absent or different, the picker does nothing
+and logs one [piperouter] warning. Logging is deliberately verbose so a failure points
+at the step that broke.
 """
 from __future__ import annotations
 
@@ -15,8 +14,11 @@ _FRAME_ID = "omni.piperouter.pick"
 
 
 class ViewportPicker:
-    """on_pick(world_xyz: list[float], hit_prim_path: str) fires on a viewport double-click,
-    with the world-space surface point and the prim under the cursor."""
+    """Fire on_pick(world_xyz, hit_prim_path) for each viewport double-click.
+
+    world_xyz is the world-space surface point; hit_prim_path is the prim under the
+    cursor.
+    """
 
     def __init__(self, on_pick):
         self._on_pick = on_pick
@@ -28,8 +30,10 @@ class ViewportPicker:
 
     # ------------------------------------------------------------------
     def enable(self):
-        """Lazily attach a double-click gesture to the active viewport. Safe to call
-        repeatedly (no-op once attached)."""
+        """Attach a double-click gesture to the active viewport.
+
+        Safe to call repeatedly; it is a no-op once attached.
+        """
         if self._screen is not None:
             return True
         try:
@@ -45,7 +49,7 @@ class ViewportPicker:
                 self._scene_view = sc.SceneView()
             self._vp_api.add_scene_view(self._scene_view)
             with self._scene_view.scene:
-                # a full-screen invisible quad that reports double-clicks
+                # Full-screen invisible quad that reports double-clicks.
                 self._screen = sc.Screen(
                     gesture=sc.DoubleClickGesture(self._on_double_click))
             carb.log_info("[piperouter] viewport double-click picker armed")
@@ -60,7 +64,7 @@ class ViewportPicker:
     def _on_double_click(self, *args):
         try:
             gesture = args[0] if args else None
-            # NDC mouse position in [-1, 1] from the gesture payload (field name varies)
+            # NDC mouse position in [-1, 1]; which object carries the payload varies.
             payload = (getattr(gesture, "gesture_payload", None)
                        or getattr(getattr(gesture, "sender", None), "gesture_payload", None))
             ndc = getattr(payload, "mouse", None)
@@ -70,7 +74,8 @@ class ViewportPicker:
             res = self._vp_api.resolution  # (w, h) of the render target
             px = (int((float(ndc[0]) * 0.5 + 0.5) * float(res[0])),
                   int((1.0 - (float(ndc[1]) * 0.5 + 0.5)) * float(res[1])))
-            # ask the renderer what's under that pixel; callback gets (path, world_pos)
+            # Ask the renderer what is under that pixel; the callback gets
+            # (path, world_pos).
             self._vp_api.request_query(px, self._on_query, query_name="piperouter.pick")
         except Exception as exc:  # noqa: BLE001
             carb.log_warn(f"[piperouter] pick double-click failed: {exc}")

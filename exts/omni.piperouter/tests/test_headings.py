@@ -16,13 +16,14 @@ def test_axis_labels_map_to_unit_vectors():
 
 def test_options_start_with_none_and_end_with_custom():
     assert headings.HEADING_OPTIONS[0] == "None"
-    # Custom is APPENDED so saved head_idx values from old sessions stay valid
+    # Custom is appended rather than inserted, so head_idx values in saved sessions
+    # keep pointing at the same axis.
     assert headings.HEADING_OPTIONS[-1] == headings.CUSTOM
     assert len(headings.HEADING_OPTIONS) == 8
 
 
 def test_custom_label_maps_to_none_vector():
-    # Custom's direction comes from the marker's rotation, not the label
+    # Custom's direction comes from the marker's rotation, not from the label.
     assert headings.axis_to_vector(headings.CUSTOM) is None
 
 

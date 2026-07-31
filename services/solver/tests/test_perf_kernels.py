@@ -1,9 +1,8 @@
-"""Equivalence tests for the performance kernels that replaced SciPy/recursive code:
+"""Equivalence tests for the vectorized kernels against straightforward references.
 
-* grids.dilate6            — shifted-OR 6-connected dilation == scipy binary_dilation
-* planners.octree_leaves   — integral-image, level-vectorized subdivision produces the
-                             SAME partition as the original recursive implementation
-* fields caches            — normalized fields / soft cost / melt masks computed once
+* grids.dilate6          shifted-OR 6-connected dilation matches scipy binary_dilation
+* planners.octree_leaves level-vectorized subdivision matches a recursive reference
+* fields caches          normalized fields, soft cost and melt masks are computed once
 """
 import numpy as np
 import pytest
@@ -44,7 +43,7 @@ def test_dilate6_edges_and_extremes():
 
 # ---------------------------------------------------------------- octree
 def _octree_reference(blocked):
-    """The original recursive implementation, kept verbatim as the reference."""
+    """Recursive subdivision reference for the octree leaf partition."""
     blocked = np.asarray(blocked, dtype=bool)
     nx, ny, nz = blocked.shape
     leaf_of = np.full(blocked.shape, -1, dtype=np.int64)
@@ -80,7 +79,7 @@ def test_octree_leaves_same_partition(shape, p, seed):
     blocked = _rand_blocked(shape, p, seed)
     r_ref, lof_ref = _octree_reference(blocked)
     r_new, lof_new = planners.octree_leaves(blocked)
-    # identical SET of leaf boxes (ids may be assigned in a different order)
+    # same set of leaf boxes; ids may be assigned in a different order
     assert sorted(map(tuple, r_ref)) == sorted(map(tuple, r_new))
     # identical free/blocked coverage
     assert np.array_equal(lof_ref >= 0, lof_new >= 0)
@@ -157,10 +156,9 @@ def test_band_mask_matches_slice_loop():
         ref = np.zeros(shape, dtype=bool)
         nx, ny, nz = shape
         for ci, cj, ck in pts:
-            # intended clipped-box semantics; the production loop this replaced used
-            # min(n, c+r+1) as the stop, which goes NEGATIVE for points more than r+1
-            # below the low edge and silently slice-wraps, painting a spurious stripe -
-            # band_mask fixes that, so the reference clamps the stop at 0 too
+            # Clipped-box semantics. Both ends of every slice are clamped to >= 0: a stop
+            # of c+r+1 goes negative for points far below the low edge, and a negative
+            # slice stop wraps around and paints a spurious stripe at the far end.
             ref[max(0, ci - r):max(0, min(nx, ci + r + 1)),
                 max(0, cj - r):max(0, min(ny, cj + r + 1)),
                 max(0, ck - r):max(0, min(nz, ck + r + 1))] = True
@@ -185,7 +183,7 @@ def test_leaf_soft_cached_and_correct():
     assert a is b                                     # cached per (rad_cells, field)
     c = planners.leaf_soft_means(st, 4, soft, ranges, leaf_of)
     assert c is not a
-    # reference: per-leaf mean via bincount, exactly the old inline computation
+    # reference: per-leaf mean via bincount
     flat = leaf_of.ravel()
     m = flat >= 0
     n = len(ranges)
@@ -216,12 +214,12 @@ def test_octree_lattice_escalates_band_before_full_lattice(monkeypatch):
     monkeypatch.setattr(g._lat, "plan", fake_lat_plan)
     out = g.plan(s, _wire(), {}, 26, (2, 2, 2), (15, 15, 15), None, 0.0, None, None)
     assert out == [(1, 1, 1), (5, 5, 5)]
-    # second attempt used a WIDER band -> fewer outside-band blocked cells
+    # the retry widens the band, so fewer cells outside it are blocked
     assert len(calls) == 2 and calls[1] < calls[0]
 
 
 def test_octree_lattice_full_fallback_guarded_on_huge_grids(monkeypatch):
-    s = _mini_stack(n=120)   # 1.7M free cells -> ~1.2B expanded edges at 26-conn
+    s = _mini_stack(n=120)   # big enough that a full 26-connected lattice is unaffordable
     g = planners.OctreeLatticeGlobal(band_cells=2)
     monkeypatch.setattr(planners, "octree_corridor", lambda *a, **k: None)
 

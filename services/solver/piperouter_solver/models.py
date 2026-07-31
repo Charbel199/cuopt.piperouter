@@ -76,16 +76,16 @@ class RouteRequest:
     weights: dict = field(default_factory=dict)  # {"surface","thermal","em","bend"}
     connectivity: int = 26
     priority: int = 0                            # lower routes first in route_all
-    # Extra safety margin (m) kept from meshes, ON TOP of the wire's own radius. 0 =
-    # the route only needs to avoid the mesh itself (may run flush against surfaces).
+    # Extra safety margin (m) kept from meshes, on top of the wire's own radius. 0 means
+    # the route only has to avoid the mesh itself, and may run flush against surfaces.
     clearance_m: float = 0.0
-    # Optional pinned headings (unit world vectors). None = free (any direction).
-    # start_heading: direction the route must LEAVE the start cell.
-    # end_heading: direction the route must ARRIVE at the end cell.
+    # Optional pinned headings (unit world vectors); None leaves the direction free.
+    # start_heading: direction the route must leave the start cell.
+    # end_heading: direction the route must arrive at the end cell.
     start_heading: tuple[float, float, float] | None = None
     end_heading: tuple[float, float, float] | None = None
-    # Pluggable algorithm choice (for evaluation / comparison). Defaults reproduce the
-    # proven pipeline exactly. See planners.py / optimizers.py for the registries.
+    # Pluggable algorithm choice, for evaluation and comparison. See planners.py and
+    # optimizers.py for the registries.
     global_planner: str = "octree_lattice"   # see planners.GLOBAL_PLANNERS
     local_optimizer: str = "fibre"    # "fibre" | "none" | "trajopt" | "elastic_rod"
 
@@ -99,8 +99,8 @@ class RouteResult:
     cells: list = field(default_factory=list)      # occupied (i,j,k) for obstacle reuse
     reason: str = ""             # human-readable explanation when status == "no_path"
     raw_polyline: list = field(default_factory=list)  # grid path before smoothing
-    # non-fatal warning on an otherwise-routed wire (e.g. a buried endpoint was relocated
-    # to the nearest open space). Shown in the panel in red while the route still stands.
+    # Non-fatal warning on an otherwise-routed wire, e.g. a buried endpoint was relocated
+    # to the nearest open space. The route still stands.
     note: str = ""
 
 

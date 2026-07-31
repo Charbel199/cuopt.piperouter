@@ -19,8 +19,8 @@ def test_voxelize_marks_cube_and_clears_far(cube_stage):
 
 
 def test_no_occupancy_in_gap_between_two_boxes():
-    # winding-number sign test must keep the EMPTY gap between two boxes free
-    # (the old normal-based test produced false "inside" occupancy there).
+    # The winding-number sign test must read the gap between two boxes as outside both,
+    # so an air pocket enclosed by nearby geometry stays free.
     from pxr import Usd, UsdGeom
     s = Usd.Stage.CreateInMemory()
     UsdGeom.Xform.Define(s, "/World")
@@ -36,21 +36,21 @@ def test_no_occupancy_in_gap_between_two_boxes():
     def cell_at(p):
         return tuple(((np.array(p) - gb) / cell).astype(int))
 
-    assert occ[cell_at((0.5, 0.5, 0.5))] == 0   # empty gap between the boxes -> FREE
+    assert occ[cell_at((0.5, 0.5, 0.5))] == 0   # empty gap between the boxes -> free
     assert occ[cell_at((0.3, 0.5, 0.5))] == 1   # inside box A -> occupied
     assert occ[cell_at((0.7, 0.5, 0.5))] == 1   # inside box B -> occupied
 
 
 def test_thin_shell_is_watertight():
-    # A door panel / sheet-metal CAD part is a THIN shell - thinner than one voxel.
-    # The winding-number interior test alone leaves holes (the surface passes between
-    # cell centres), so a wire slips through. Every column crossing the wall must hit
-    # at least one occupied cell, otherwise a straight route would tunnel through.
+    # Sheet-metal parts (door panels, brackets) are thinner than one voxel. The
+    # winding-number interior test alone leaves holes where the surface passes between
+    # cell centres, so the voxelizer also has to mark surface-crossing cells: every
+    # column crossing the wall must hit an occupied cell or a straight route tunnels through.
     from pxr import Usd, UsdGeom
     s = Usd.Stage.CreateInMemory()
     UsdGeom.SetStageMetersPerUnit(s, 1.0)
     UsdGeom.Xform.Define(s, "/World")
-    # 5 mm-thick wall in X, spanning Y/Z - far thinner than the ~30 mm voxels below.
+    # 5 mm thick wall in X spanning Y/Z, far thinner than the ~30 mm voxels below.
     scene_ops.author_box_mesh(s, "/World/wall", (0.5, 0.5, 0.5), (0.005, 0.6, 0.6))
     prims = scene_ops.list_collidable_meshes(s)
     bmin, bmax = scene_ops.compute_bounds(s, prims)
@@ -60,7 +60,7 @@ def test_thin_shell_is_watertight():
     occ, _ = voxelizer.voxelize(pts, idx, gbmin, cell, res)
 
     # For every (j,k) column whose centre lies within the wall's Y/Z extent, at least
-    # one X cell must be occupied - no straight-through gap.
+    # one X cell must be occupied, leaving no straight-through gap.
     ri, rj, rk = res
     jk_centres_y = gbmin[1] + (np.arange(rj) + 0.5) * cell
     jk_centres_z = gbmin[2] + (np.arange(rk) + 0.5) * cell

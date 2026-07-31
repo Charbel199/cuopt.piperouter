@@ -1,13 +1,16 @@
-"""Reconstruct the octree_lattice planner's structure for VISUALIZATION (pxr-free,
-headless-testable).
+"""Reconstruct the octree_lattice planner's structure for the debug visualisation.
 
-Mirrors `piperouter_solver.planners.OctreeGlobal` / `OctreeLatticeGlobal`: subdivide the
-blocked grid into an octree (a node is a leaf when uniformly free, dropped when uniformly
-blocked, split otherwise), run A* over the free-leaf adjacency for a coarse corridor, then
-dilate that corridor into the band the fine heading-lattice would actually search. We
-rebuild it from the occupancy grid the extension already holds, so the viz needs no solver
-round-trip. It's the same algorithm, so the leaves are identical; the corridor uses a plain
-distance cost (the planner adds soft costs) so treat the corridor/band as representative.
+Pxr-free so it can be tested headless. Mirrors
+`piperouter_solver.planners.OctreeGlobal` and `OctreeLatticeGlobal`: subdivide the
+blocked grid into an octree (a node becomes a leaf when uniformly free, is dropped when
+uniformly blocked, and is split otherwise), run A* over the free-leaf adjacency for a
+coarse corridor, then dilate that corridor into the band the fine heading-lattice would
+search.
+
+Everything is rebuilt from the occupancy grid the extension already holds, so the
+visualisation needs no solver round-trip. The subdivision is the same algorithm, so the
+leaves match exactly. The corridor uses plain distance cost where the planner also adds
+soft costs, so the corridor and band are representative rather than identical.
 """
 from __future__ import annotations
 
@@ -19,8 +22,11 @@ _DIRS = ((1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1))
 
 
 def build_octree(blocked):
-    """Return (leaves, leaf_of). leaves = list of (i0,i1,j0,j1,k0,k1) free-leaf ranges;
-    leaf_of[i,j,k] = leaf id or -1 (blocked/dropped)."""
+    """Return (leaves, leaf_of) for the free-space octree over `blocked`.
+
+    `leaves` lists free-leaf cell ranges as (i0,i1,j0,j1,k0,k1); `leaf_of[i,j,k]` is the
+    leaf id covering that cell, or -1 where the cell was blocked and dropped.
+    """
     blocked = np.asarray(blocked, dtype=bool)
     nx, ny, nz = blocked.shape
     leaf_of = np.full(blocked.shape, -1, dtype=np.int64)
@@ -29,7 +35,7 @@ def build_octree(blocked):
     while nodes:
         i0, i1, j0, j1, k0, k1 = nodes.pop()
         sub = blocked[i0:i1, j0:j1, k0:k1]
-        if not sub.any():                                   # uniformly FREE -> leaf
+        if not sub.any():                                   # uniformly free -> leaf
             lid = len(leaves)
             leaf_of[i0:i1, j0:j1, k0:k1] = lid
             leaves.append((i0, i1, j0, j1, k0, k1))
@@ -48,9 +54,11 @@ def build_octree(blocked):
 
 
 def leaf_adjacency(leaf_of, n_leaves):
-    """Vectorized face-adjacency of free leaves (mirrors planners.leaf_adjacency): compare
-    neighbouring slabs per axis, dedup the (lo,hi) leaf pairs. O(grid) in numpy instead of
-    the old O(free-voxels) Python loop."""
+    """Return face-adjacency of the free leaves, mirroring planners.leaf_adjacency.
+
+    Compares neighbouring slabs per axis and dedups the (lo, hi) leaf pairs, which keeps
+    the whole thing in numpy at O(grid).
+    """
     adj = {}
     pa, pb = [], []
     for x, y in ((leaf_of[:-1, :, :], leaf_of[1:, :, :]),
@@ -89,9 +97,12 @@ def _seg_cells(p, q):
 
 
 def corridor_and_band(blocked, leaves, leaf_of, start_cell, goal_cell, band=4):
-    """Coarse octree A* corridor (start->goal through free-leaf centres) + the dilated band
-    of fine cells the heading-lattice would search. Returns (corridor_cells, band_mask) or
-    (None, None) if either endpoint isn't in a free leaf / no corridor."""
+    """Return (corridor_cells, band_mask) for the coarse octree A* route.
+
+    The corridor runs start to goal through free-leaf centres; the band is that corridor
+    dilated into the fine cells the heading-lattice would search. Yields (None, None)
+    when either endpoint falls outside a free leaf, or when no corridor exists.
+    """
     blocked = np.asarray(blocked, dtype=bool)
     nx, ny, nz = blocked.shape
 

@@ -1,11 +1,11 @@
 """Routing orchestration, omni-free so it is fully testable headlessly.
 
-voxelize_scene: read stage -> bounds -> Warp voxelize + thermal/EM fields -> write
-grids to the shared dir. route_all: build route payloads from the wire list, call the
-solver, author tubes, compute the BOM.
+voxelize_scene reads the stage, takes its bounds, runs the Warp voxelizer and the
+thermal/EM fields, then writes the grids to the shared directory. route_all builds route
+payloads from the wire list, calls the solver, authors tubes and computes the BOM.
 
-A `wire` dict: {name (unique route id), spec (wire-type props), start, end,
-waypoints, weights, connectivity, priority}.
+A `wire` dict holds: name (which is the unique route id), spec (the wire-type
+properties), start, end, waypoints, weights, connectivity and priority.
 """
 from __future__ import annotations
 
@@ -19,16 +19,12 @@ from . import bundles as bundle_lib
 from . import fields, grid_io, scene_ops, voxelizer
 from .solver_client import SolverClient
 
-# Logs surface in the Kit console (and stderr headless) tagged [piperouter].
+# Logs surface in the Kit console, and on stderr headless, tagged [piperouter].
 log = logging.getLogger("piperouter")
 
 
-# Authored tubes render at least this thick so routes are visible at scene scale.
-# Purely cosmetic - BOM and clearance use the physical wire spec, not this.
-MIN_DISPLAY_DIAMETER_M = 0.04
-
-# Thermal/EM fields radiate over (object characteristic size + this margin), with a
-# floor so even small tagged prims have a usable reach. Tune to taste.
+# Thermal and EM fields radiate over the object's characteristic size plus this margin,
+# with a floor so even small tagged prims have a usable reach.
 FIELD_MARGIN_M = 1.0
 MIN_FALLOFF_M = 0.75
 
@@ -38,20 +34,21 @@ class RouterSession:
         self.grid_dir = Path(grid_dir)
         self.client = SolverClient(solver_url)
         self.frame = None         # (bounds_min, cell_size, res_xyz) from the last voxelize
-        self.last_stats = {}      # stats from the last compute_grids (for logging/UI)
+        self.last_stats = {}      # stats from the last compute_grids, for logging and UI
         self.last_grids = None    # (bounds_min, cell, res, occ, thermal, em) for views/overlay
-        self.mpu = 1.0            # meters per stage unit (set in compute_grids)
-        self.last_clearance_m = 0.0   # safety clearance (set in compute_grids; sent per route,
-                                      # no longer baked into the grid)
-        # selected routing algorithms (sent to the solver in every route request)
+        self.mpu = 1.0            # meters per stage unit, set in compute_grids
+        self.last_clearance_m = 0.0   # safety clearance in metres, sent with each route
+        # Routing algorithms, sent to the solver in every route request.
         self.global_planner = "octree_lattice"
         self.local_optimizer = "fibre"
 
     @staticmethod
     def _mpu(stage):
-        """Meters per stage unit from the stage's metersPerUnit metadata (Omniverse
-        default 0.01 = cm). The solver always works in meters; this is the conversion
-        factor between stage coordinates and meters."""
+        """Return metres per stage unit, from the stage's metersPerUnit metadata.
+
+        Omniverse defaults to 0.01, i.e. centimetres. The solver always works in metres,
+        so this is the conversion factor between stage coordinates and metres.
+        """
         try:
             from pxr import UsdGeom
             v = float(UsdGeom.GetStageMetersPerUnit(stage))
@@ -66,35 +63,40 @@ class RouterSession:
 
     @staticmethod
     def _hdg(p, q):
-        """Unit direction from p to q (world axes align with grid axes, so it doubles as
-        a lattice heading). None for a degenerate zero-length step."""
+        """Return the unit direction from p to q, or None for a zero-length step.
+
+        World axes align with grid axes, so the result also serves as a lattice heading.
+        """
         d = np.asarray(q, dtype=float) - np.asarray(p, dtype=float)
         n = float(np.linalg.norm(d))
         return [float(x) for x in (d / n)] if n > 1e-9 else None
 
     def _display_diameter_m(self, real_diameter_m):
-        """Tube display diameter (m) = the wire/pipe's TRUE physical gauge. The scene is at
-        real scale, so we draw real thickness (a 1.3 mm wire is 1.3 mm, a 16 mm hose is
-        16 mm) - accurate and type-distinct. The tiny floor only avoids a zero/degenerate
-        tube (e.g. bundle types whose real thickness comes from the bundle-diameter
-        formula, not a fixed gauge)."""
-        return max(float(real_diameter_m), 0.0005)   # 0.5 mm guard against zero only
+        """Return the tube display diameter in metres for a wire's physical gauge.
+
+        The scene is at real scale, so tubes are drawn at true thickness: a 1.3 mm wire
+        is 1.3 mm and a 16 mm hose is 16 mm, which keeps types visually distinct. The
+        floor exists only to avoid a degenerate zero-radius tube, as with bundle types
+        whose thickness comes from the bundle-diameter formula rather than a fixed gauge.
+        """
+        return max(float(real_diameter_m), 0.0005)   # 0.5 mm, a guard against zero
 
     def compute_grids(self, stage, resolution=64, pad_frac=0.05, clearance_m=0.0):
-        """Read the stage and build the four voxel grids (occupancy, surface distance,
-        thermal, EM) IN MEMORY. occupancy is the RAW mesh (clearance is NOT baked in - the
-        solver applies it as a relaxable band, waived around endpoints, so it can tell a
-        real mesh from a clearance halo). `clearance_m` is remembered for the route requests
-        and for re-dilating the overlay/2D views at display time. Shared by voxelize_scene
-        and the debug overlay.
+        """Build the four voxel grids in memory from the stage.
 
-        UNITS: the solver works in METERS. The stage may use any metersPerUnit (cm by
-        default in Omniverse, mm for many CAD imports), so all geometry read from the
-        stage is multiplied by `mpu` (meters per stage unit) here - the resulting grid
-        (gbmin, cell) is in METERS. The route methods convert endpoints/polylines at the
-        same boundary. self.mpu is cached for the authoring side.
+        Returns (bounds_min, cell_size, res_xyz, occupancy, surface_dist, thermal, em),
+        and is shared by voxelize_scene and the debug overlay.
 
-        Returns: (bounds_min, cell_size, res_xyz, occupancy, surface_dist, thermal, em).
+        Occupancy is the raw mesh: clearance is deliberately not baked in, so the solver
+        can still distinguish real mesh from clearance halo. It applies clearance itself
+        as a relaxable band, waived near endpoints. `clearance_m` is remembered here for
+        the route requests and for re-dilating the overlay and 2D views at display time.
+
+        Units: the solver works in metres, while the stage may use any metersPerUnit,
+        centimetres by default in Omniverse and millimetres for many CAD imports. All
+        geometry read from the stage is multiplied by `mpu` here, so the resulting grid
+        (gbmin, cell) is metric. The route methods convert endpoints and polylines at the
+        same boundary, and self.mpu is cached for the authoring side.
         """
         t0 = time.perf_counter()
         mpu = self._mpu(stage)
@@ -103,12 +105,12 @@ class RouterSession:
         bounds = scene_ops.compute_bounds(stage, prims)
         if bounds is None:
             raise ValueError("no collidable geometry in stage")
-        bmin, bmax = np.asarray(bounds[0]) * mpu, np.asarray(bounds[1]) * mpu  # -> meters
-        # Grow bounds to include all markers (endpoints + waypoints) so routing to a
-        # marker dragged beyond the geometry isn't clamped to the grid edge.
+        bmin, bmax = np.asarray(bounds[0]) * mpu, np.asarray(bounds[1]) * mpu  # -> metres
+        # Bounds must cover every marker, endpoints and waypoints alike, or a marker
+        # dragged past the geometry gets clamped to the grid edge.
         markers = scene_ops.marker_positions(stage)
         if markers:
-            mp = np.asarray(markers, dtype=float) * mpu   # -> meters
+            mp = np.asarray(markers, dtype=float) * mpu   # -> metres
             bmin = np.minimum(bmin, mp.min(axis=0))
             bmax = np.maximum(bmax, mp.max(axis=0))
         pad = (bmax - bmin) * pad_frac + 1e-3
@@ -117,21 +119,21 @@ class RouterSession:
         gbmin, cell, res = grid_io.frame_from_bounds(bmin, bmax, resolution)
         t_setup = time.perf_counter()
         pts, idx = voxelizer.collect_meshes(stage, prims)
-        pts = np.asarray(pts, dtype=np.float32) * mpu     # stage units -> meters
+        pts = np.asarray(pts, dtype=np.float32) * mpu     # stage units -> metres
         occ, sd = voxelizer.voxelize(pts, idx, gbmin, cell, res)
         t_vox = time.perf_counter()
 
-        # NOTE: the safety clearance is NO LONGER baked into the occupancy. occ stays the
-        # RAW mesh so the solver can tell mesh from clearance-halo - it relocates endpoints
-        # only out of the real mesh, applies clearance as a relaxable band (waived around
-        # endpoints), and the overlay re-dilates by this for display. Clearance now travels
-        # to the solver in each route request (no longer baked here).
+        # Clearance travels to the solver in each route request rather than being baked
+        # into occ, which keeps occ the raw mesh. That distinction matters downstream:
+        # endpoints are relocated out of real mesh only, clearance is a relaxable band
+        # waived around endpoints, and the overlay re-dilates by this value for display.
         self.last_clearance_m = float(clearance_m)
 
-        # PER-OBJECT clearance (customer: minimum distance per component category):
-        # prims tagged with CLEARANCE_ATTR are voxelized per distinct value into a class
-        # grid; the solver keeps each class's own distance, untagged geometry uses the
-        # global default above. Ascending order so the LARGEST clearance wins on overlap.
+        # Per-object clearance, a minimum distance per component category. Prims tagged
+        # with CLEARANCE_ATTR are voxelized per distinct value into a class grid and the
+        # solver honours each class's own distance; untagged geometry falls back to the
+        # global default. Values are processed in ascending order so that the largest
+        # clearance wins where classes overlap.
         cls_grid = np.zeros(tuple(int(r) for r in res), dtype=np.uint8)
         cls_values: list[float] = []
         groups: dict[float, list] = {}
@@ -150,12 +152,12 @@ class RouterSession:
             cls_grid[gocc.astype(bool)] = len(cls_values)   # class ids are 1-based
         self.last_clearance_classes = (cls_grid, cls_values) if cls_values else None
 
-        # Thermal / EM fields: each tagged prim becomes a source at its bbox centre.
-        # The field radiates over `char_size + FIELD_MARGIN_M` so a big hot block heats
-        # a region proportional to its size (a fixed falloff vanished once the scene
-        # was scaled up). MIN_FALLOFF keeps tiny tagged prims from having ~zero reach.
+        # Thermal and EM fields: each tagged prim becomes a source at its bbox centre.
+        # The field radiates over char_size + FIELD_MARGIN_M, so a large hot block heats
+        # a region proportional to its size, and MIN_FALLOFF_M keeps tiny tagged prims
+        # from having near-zero reach.
         tags = scene_ops.read_thermal_em_tags(stage)
-        # source centres + characteristic size are in stage units -> scale to meters
+        # Source centres and characteristic sizes are in stage units, so scale to metres.
         thermal_sources = [(np.asarray(c) * mpu, t,
                             max(MIN_FALLOFF_M, char * mpu + FIELD_MARGIN_M))
                            for (c, t, e, char) in tags if t is not None]
@@ -175,7 +177,7 @@ class RouterSession:
             "thermal_max_c": float(thermal.max()),
             "seconds": round(t_fields - t0, 2),
         }
-        # per-step timing breakdown so it's clear where voxelization time goes
+        # Per-step breakdown, so a slow voxelization can be attributed to a stage.
         log.info("[piperouter] voxelize %s = %d occ | %d meshes/%d tris | "
                  "TIMING setup %.0fms + voxelize(GPU) %.0fms + fields %.0fms = %.0fms total",
                  self.last_stats["res"], self.last_stats["occupied"],
@@ -196,27 +198,30 @@ class RouterSession:
                            clearance_values=cc[1] if cc else None)
         log.info("[piperouter] grid handoff saved in %.0fms", (time.perf_counter() - t_save) * 1e3)
         self.frame = (gbmin, cell, res)
-        self.last_grids = (gbmin, cell, res, occ, sd, thermal, em)  # + sd for debug views
+        self.last_grids = (gbmin, cell, res, occ, sd, thermal, em)  # sd is for debug views
         return session_id
 
     def route_all(self, stage, session_id, wires):
-        """Returns (results, bom). Results are matched back to wires by unique name."""
+        """Route every wire and return (results, bom).
+
+        Results are matched back to wires by their unique name.
+        """
         mpu = self._mpu(stage)
         inv = 1.0 / mpu
         routes = []
         for w in wires:
             spec = dict(w["spec"])
-            spec["id"] = w["name"]  # unique per-route id (echoed back as wire_id)
+            spec["id"] = w["name"]  # unique per-route id, echoed back as wire_id
             routes.append({
                 "wire": spec,
-                # stage units -> meters for the solver
+                # stage units -> metres for the solver
                 "start": self._scaled([w["start"]], mpu)[0],
                 "end": self._scaled([w["end"]], mpu)[0],
                 "waypoints": self._scaled(w.get("waypoints", []), mpu),
                 "weights": dict(w.get("weights", {})),
                 "connectivity": int(w.get("connectivity", 26)),
                 "priority": int(w.get("priority", 0)),
-                "clearance_m": float(self.last_clearance_m),  # real clearance, applied solver-side
+                "clearance_m": float(self.last_clearance_m),  # applied solver-side
                 "start_heading": w.get("start_heading"),
                 "end_heading": w.get("end_heading"),
                 "global_planner": self.global_planner,
@@ -240,7 +245,7 @@ class RouterSession:
                 continue
             diameter = self._display_diameter_m(float(spec["outer_diameter_mm"]) / 1000.0)
             color = spec.get("color", (0.8, 0.1, 0.1))
-            # solver polyline is meters -> back to stage units for authoring
+            # The solver polyline is in metres; author in stage units.
             scene_ops.author_tube(
                 stage, f"{scene_ops.ROUTES_SCOPE}/{res['wire_id']}",
                 self._scaled(res["polyline"], inv), diameter * inv, color)
@@ -259,10 +264,12 @@ class RouterSession:
         return resp["results"], bom
 
     def refine_wire(self, stage, session_id, wire, locked_wires):
-        """Re-route a single wire (honouring its waypoints + weights) while every
-        other routed wire in `locked_wires` acts as an obstacle, so the re-routed
-        wire never overlaps the rest. Authors/replaces only this wire's tube.
-        Returns (result_dict, bom_row)."""
+        """Re-route one wire, honouring its waypoints and weights.
+
+        Every routed wire in `locked_wires` acts as an obstacle, so the re-routed wire
+        cannot overlap the rest. Only this wire's tube is authored or replaced. Returns
+        (result_dict, bom_row).
+        """
         locked_routes = []
         for lw in locked_wires:
             poly = lw.get("polyline")
@@ -284,7 +291,7 @@ class RouterSession:
             "waypoints": self._scaled(wire.get("waypoints", []), mpu),
             "weights": dict(wire.get("weights", {})),
             "connectivity": int(wire.get("connectivity", 26)),
-            "clearance_m": float(self.last_clearance_m),  # real clearance, applied solver-side
+            "clearance_m": float(self.last_clearance_m),  # applied solver-side
             "start_heading": wire.get("start_heading"),
             "end_heading": wire.get("end_heading"),
             "global_planner": self.global_planner,
@@ -311,31 +318,33 @@ class RouterSession:
         return res, bom_row
 
     def route_all_with_bundles(self, stage, session_id, wires, bundles):
-        """Bundle-aware Route All.
+        """Bundle-aware Route All, returning (results, bom).
 
-        Two-phase algorithm supporting wires that are in MULTIPLE bundles:
+        Runs in two phases, and a wire may belong to several bundles.
 
-        Phase 1 - route ALL trunks in bundle order. Each trunk's cells become
-        obstacles for subsequent bundles so they don't collide.
+        Phase 1 routes the trunks in bundle order. Each trunk's cells become obstacles
+        for later bundles, so trunks cannot collide.
 
-        Phase 2 - for each member wire, determine its complete segment sequence
-        across ALL bundles it belongs to (in order), then route every individual
-        (non-trunk) segment. Example for a wire in B1 then B2:
-            wire_start -> B1_merge  [individual]
-            B1_merge   -> B1_split  [trunk B1, already routed]
-            B1_split   -> B2_merge  [individual - between-bundle segment]
-            B2_merge   -> B2_split  [trunk B2, already routed]
-            B2_split   -> wire_end  [individual]
-        Then stitch all segments + trunks into one continuous polyline and author
-        one per-wire colored tube (trunks are visually covered by their thick tubes).
-        Returns (results, bom).
+        Phase 2 works out each member wire's full segment sequence across the bundles it
+        belongs to, in order, and routes every non-trunk segment. For a wire in B1 then
+        B2 that is:
+
+            wire_start -> B1_merge  individual
+            B1_merge   -> B1_split  trunk B1, already routed
+            B1_split   -> B2_merge  individual, between bundles
+            B2_merge   -> B2_split  trunk B2, already routed
+            B2_split   -> wire_end  individual
+
+        The segments and trunks are then stitched into one continuous polyline and
+        authored as a single coloured tube per wire; the thicker trunk tubes visually
+        cover the shared stretches.
         """
         mpu = self._mpu(stage)
         inv = 1.0 / mpu
         member_names = {name for b in bundles for name in b["members"]}
         wire_by_name = {w["name"]: w for w in wires}
 
-        # --- Phase 0: route non-bundle wires first ---
+        # --- Phase 0: non-bundle wires ---
         non_bundle = [w for w in wires if w["name"] not in member_names]
         if non_bundle:
             nb_results, nb_bom = self.route_all(stage, session_id, non_bundle)
@@ -346,8 +355,8 @@ class RouterSession:
         all_results = list(nb_results)
         all_bom = list(nb_bom)
 
-        # --- Phase 1: route every trunk in bundle order ---
-        trunk_data = {}   # bid -> {poly, len, ts, member_specs, conn}
+        # --- Phase 1: trunks, in bundle order ---
+        trunk_data = {}   # bundle id -> {poly, len, ts, member_specs, conn}
         failed_bundles = set()
 
         for b in bundles:
@@ -375,7 +384,7 @@ class RouterSession:
             merge_pos = scene_ops.get_world_pos(stage, b["merge_marker"])
             split_pos = scene_ops.get_world_pos(stage, b["split_marker"])
             if merge_pos is not None:
-                merge_pos = np.asarray(merge_pos) * mpu   # stage units -> meters
+                merge_pos = np.asarray(merge_pos) * mpu   # stage units -> metres
             if split_pos is not None:
                 split_pos = np.asarray(split_pos) * mpu
             if merge_pos is None or split_pos is None:
@@ -393,8 +402,8 @@ class RouterSession:
             ts = bundle_lib.trunk_spec(member_specs, bid)
             conn = member_wires[0].get("connectivity", 18)
             trunk_weights = dict(b.get("weights", {}))
-            # Resolve the bundle's trunk waypoints (stage marker paths) to world
-            # positions and convert to meters, so the shared trunk passes through them.
+            # Trunk waypoints are stored as stage marker paths; resolve them to world
+            # positions in metres so the shared trunk passes through them.
             trunk_wps = []
             for wp_path in b.get("waypoints", []):
                 wp = scene_ops.get_world_pos(stage, wp_path)
@@ -430,8 +439,8 @@ class RouterSession:
                 stage, f"{scene_ops.ROUTES_SCOPE}/bundle_{bid}_trunk",
                 self._scaled(trunk_poly, inv), trunk_od_m * inv, tuple(ts["color"]))
 
-            # Use the bundle's harness type cost_per_m when the panel has set it;
-            # fall back to summing individual member wire costs.
+            # Prefer the bundle's harness-type cost_per_m when the panel has set one,
+            # otherwise sum the individual member costs.
             bundle_type_cost_pm = float(b.get("bundle_type_cost_pm", 0.0))
             combined_cost_pm = (bundle_type_cost_pm if bundle_type_cost_pm > 0
                                 else sum(float(s.get("cost_per_m", 0.0))
@@ -450,7 +459,7 @@ class RouterSession:
                 "member_specs": member_specs, "conn": conn,
             }
 
-        # --- Phase 2: for each member wire, route all individual segments ---
+        # --- Phase 2: the individual segments of each member wire ---
         # Collect each unique member wire and the ordered bundles it belongs to.
         wire_bundles: dict[str, list] = {}
         for b in bundles:
@@ -461,7 +470,7 @@ class RouterSession:
                     continue
                 wire_bundles.setdefault(name, []).append(b)
 
-        already_added = set()   # wire names already in all_results
+        already_added = set()   # wire names already present in all_results
 
         for wire_name, wire_bundle_list in wire_bundles.items():
             w = wire_by_name[wire_name]
@@ -471,13 +480,14 @@ class RouterSession:
             od_m = self._display_diameter_m(float(spec["outer_diameter_mm"]) / 1000.0)
             color = spec.get("color", (0.8, 0.1, 0.1))
 
-            # wire endpoints stage units -> meters (trunk merge/split already meters)
+            # Wire endpoints go from stage units to metres; trunk merge/split are metric
+            # already.
             w_start_m = self._scaled([w["start"]], mpu)[0]
             w_end_m = self._scaled([w["end"]], mpu)[0]
 
-            # This wire's own waypoints, bucketed by slot (how many of its bundles come
-            # before them). gaps[s] = waypoints to visit in the s-th gap; gaps[K] is the
-            # final stretch to the wire end. All positions in METERS.
+            # This wire's own waypoints, bucketed by slot, meaning how many of its
+            # bundles precede them. gaps[s] holds the waypoints visited in the s-th gap
+            # and gaps[K] the final stretch to the wire end. All positions in metres.
             K = len(wire_bundle_list)
             wp_m = self._scaled(w.get("waypoints", []), mpu)
             wp_slots = w.get("waypoint_slots", [])
@@ -486,8 +496,8 @@ class RouterSession:
                 s = wp_slots[wi_] if wi_ < len(wp_slots) else 0
                 gaps[min(max(int(s), 0), K)].append([float(x) for x in pos])
 
-            # Build the ordered list of (from, to, is_trunk, bid, waypoints) for this wire
-            # across all its bundles, interleaving its waypoints. All positions in METERS.
+            # Ordered (from, to, is_trunk, bid, waypoints) across all this wire's
+            # bundles, with its waypoints interleaved. All positions in metres.
             segments = []
             prev_split = None
             for s, b in enumerate(wire_bundle_list):
@@ -496,13 +506,14 @@ class RouterSession:
                 segments.append((seg_start, td["merge_pos"], False, b["id"], gaps[s]))
                 segments.append((td["merge_pos"], td["split_pos"], True, b["id"], []))
                 prev_split = td["split_pos"]
-            # Final segment: last split -> wire end, carrying any trailing waypoints.
+            # Final segment runs from the last split to the wire end, carrying any
+            # trailing waypoints.
             last_start = prev_split if prev_split is not None else w_start_m
             segments.append((last_start, w_end_m, False, None, gaps[K]))
 
-            # Route each non-trunk segment, collect results. Heading continuity is threaded
-            # across segments so the branch joins the shared trunk (and leaves it) smoothly
-            # instead of kinking at merge/split - the same fix route_one does for waypoints.
+            # Route each non-trunk segment. Heading continuity is threaded across
+            # segments so a branch joins and leaves the shared trunk smoothly rather than
+            # kinking at the merge or split.
             full_poly = []
             branch_len = 0.0
             failed = False
@@ -511,15 +522,14 @@ class RouterSession:
             for seg_idx, (seg_from, seg_to, is_trunk, bid, seg_wps) in enumerate(segments):
                 if is_trunk:
                     td = trunk_data[bid]
-                    # Stitch the shared trunk into the full polyline
                     full_poly = bundle_lib.stitch_polylines(
                         full_poly, td["poly"], []) if full_poly else list(td["poly"])
                     tp = td["poly"]
-                    if len(tp) >= 2:   # next branch leaves the split along the trunk's exit
+                    if len(tp) >= 2:   # next branch leaves the split along the trunk exit
                         prev_heading = self._hdg(tp[-2], tp[-1])
                 else:
-                    # if the next segment is a trunk, arrive at its merge aligned with the
-                    # trunk's entry direction so the join is smooth
+                    # When a trunk comes next, arrive at its merge aligned with the
+                    # trunk's entry direction so the join is smooth.
                     goal_h = None
                     nxt = segments[seg_idx + 1] if seg_idx + 1 < len(segments) else None
                     if nxt is not None and nxt[2]:
@@ -538,7 +548,8 @@ class RouterSession:
                     }
                     seg_res = self.client.solve(session_id, seg_route)
                     if seg_res["status"] != "routed" and (prev_heading or goal_h):
-                        # continuity headings over-constrained this segment -> retry relaxed
+                        # The continuity headings over-constrained this segment; retry
+                        # without them.
                         seg_route["start_heading"] = None
                         seg_route["end_heading"] = None
                         seg_res = self.client.solve(session_id, seg_route)
@@ -558,8 +569,8 @@ class RouterSession:
                     branch_len += float(seg_res["length_m"])
                     full_poly = (bundle_lib.stitch_polylines(full_poly, poly, [])
                                  if full_poly else list(poly))
-                    # Author individual segment tube (colored; overlapping trunk
-                    # sections are visually hidden under the thicker trunk tube)
+                    # Author the segment's own coloured tube; where it overlaps a trunk it
+                    # is hidden under the thicker trunk tube.
                     if len(poly) >= 2:
                         scene_ops.author_tube(
                             stage,
@@ -576,7 +587,7 @@ class RouterSession:
                 })
                 all_bom.append({
                     "wire_id": wire_name, "status": "routed",
-                    "length_m": branch_len,   # BOM: branch-only length
+                    "length_m": branch_len,   # branch only; the trunk gets its own row
                     "cost": branch_len * float(spec.get("cost_per_m", 0.0)),
                     "mass": branch_len * float(spec.get("mass_per_m_kg", 0.0)),
                     "reason": "",

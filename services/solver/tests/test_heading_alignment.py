@@ -1,5 +1,5 @@
-"""Pinned headings must PREFER the exact direction, not just anything within the
-45-degree cone (the rotatable-gizmo feature exposes arbitrary angles)."""
+"""A pinned heading departs along the exact direction given, not merely somewhere inside
+the 45-degree acceptance cone. Headings are arbitrary vectors, not lattice directions."""
 import numpy as np
 
 from piperouter_solver.models import RouteRequest, WireType
@@ -13,16 +13,16 @@ def _wire():
 
 
 def _first_step(res, start_cell):
-    # cells[0] is the first cell AFTER the source, so the departure direction is
-    # cells[0] - start_cell (the cone/alignment-gated first move).
+    # cells[0] is the first cell after the source, so the departure direction is
+    # cells[0] - start_cell: the first move, the one the heading gate constrains.
     d = np.asarray(res.cells[0], float) - np.asarray(start_cell, float)
     return d / (np.linalg.norm(d) + 1e-12)
 
 
 def test_departure_follows_exact_heading_ray(empty_stack):
-    # heading at azimuth ~30 deg (not a lattice direction): the departure stub
-    # rasterizes the EXACT ray, so the direction over the stub must match the arrow
-    # far better than any single lattice offset (+X is 30 deg off, diagonal 15 deg off).
+    # Azimuth 30 deg is not a lattice direction. The stub rasterizes the ray itself, so it
+    # tracks the heading much closer than any single lattice offset could: +X is 30 deg
+    # off and the diagonal 15 deg off, while the stub must land within 0.99 cosine.
     s = empty_stack
     h = np.array([np.cos(np.radians(30)), np.sin(np.radians(30)), 0.0])
     res = Solver().route_one(s, RouteRequest(
@@ -52,8 +52,8 @@ def _steps(cells):
 
 
 def test_start_heading_forces_straight_exit(empty_stack):
-    # heading +Y with bend weight 0: without the stub the route could turn 90 degrees
-    # after ONE voxel. The stub forces >= 2 straight cells along the arrow first.
+    # With bend weight 0 nothing else discourages a 90-degree turn one voxel out, so the
+    # stub is what forces at least two straight cells along the heading.
     s = empty_stack
     res = Solver().route_one(s, RouteRequest(
         wire=_wire(), start=tuple(s.frame.grid_to_world((2, 2, 1))),
@@ -66,7 +66,7 @@ def test_start_heading_forces_straight_exit(empty_stack):
 
 
 def test_end_heading_forces_straight_arrival(empty_stack):
-    # arrival along +X: the LAST >= 2 steps into the goal must be +X even with bend 0.
+    # The last steps into the goal run along +X even with bend weight 0.
     s = empty_stack
     res = Solver().route_one(s, RouteRequest(
         wire=_wire(), start=tuple(s.frame.grid_to_world((0, 8, 1))),
@@ -78,8 +78,7 @@ def test_end_heading_forces_straight_arrival(empty_stack):
 
 
 def test_blocked_runway_shortens_stub_instead_of_failing(empty_stack):
-    # a wall right after the start along the heading: the stub shortens and the wire
-    # still routes (graceful degradation, no no_path).
+    # A wall just along the heading shortens the stub rather than failing the route.
     s = empty_stack
     s.occupancy[2, 4, :] = 1                 # blocks the +Y runway 2 cells out
     res = Solver().route_one(s, RouteRequest(

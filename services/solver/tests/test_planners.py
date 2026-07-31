@@ -35,8 +35,8 @@ def _path_len(cells, cell_size):
 
 
 def test_octree_lattice_matches_lattice(empty_stack):
-    # the corridor (octree) + banded lattice must produce a route of essentially the same
-    # length as the full lattice (it runs the same lattice, just restricted to a band).
+    # The octree corridor plus banded lattice runs the same lattice restricted to a band,
+    # so restricting it must not cost meaningful length against the full lattice.
     s = empty_stack
     s.occupancy[5, :8, :] = 1
     wire = _wire()
@@ -59,8 +59,9 @@ def test_rrt_is_deterministic(empty_stack):
 
 
 def test_octree_lattice_respects_prior_routes(empty_stack):
-    # the cached octree is geometry-only, so prior wires (extra_obstacles) must still be
-    # avoided by the FINE lattice pass - this is the correctness guarantee for Route All.
+    # The cached octree is built from geometry alone, so prior wires arrive only as
+    # extra_obstacles and it is the fine lattice pass that has to avoid them. This is what
+    # keeps Route All correct.
     s = empty_stack
     wire = _wire()
     a, b = (0, 5, 1), (9, 5, 1)
@@ -75,11 +76,11 @@ def test_octree_lattice_respects_prior_routes(empty_stack):
 
 
 def test_octree_cache_reused_across_wires(empty_stack):
-    # second plan on the same stack reuses the cached geometry octree (one entry per radius)
+    # the geometry octree is cached per stack with one entry per dilation radius
     s = empty_stack
     s.occupancy[5, :8, :] = 1
     olt = planners.OctreeLatticeGlobal()
     olt.plan(s, _wire(), {"bend": 1.0}, 26, (0, 5, 1), (9, 5, 1), None, 0.0, None, None)
     assert "_octree_cache" in s.__dict__ and len(s.__dict__["_octree_cache"]) == 1
     olt.plan(s, _wire(), {"bend": 1.0}, 26, (0, 6, 1), (9, 6, 1), None, 0.0, None, None)
-    assert len(s.__dict__["_octree_cache"]) == 1   # same radius -> no rebuild
+    assert len(s.__dict__["_octree_cache"]) == 1   # same radius, so no rebuild

@@ -1,5 +1,5 @@
-"""Per-object clearance (clearance-class grid): tagged geometry keeps ITS distance,
-untagged geometry keeps the request default."""
+"""Per-object clearance via the clearance-class grid: tagged geometry keeps the distance
+its class specifies, untagged geometry keeps the request's default."""
 import numpy as np
 
 from piperouter_solver.grids import GridStack
@@ -14,8 +14,7 @@ def _wire():
 
 
 def _stack_two_walls():
-    """A corridor between two wall slabs: y=4 (TAGGED, big clearance) and y=16
-    (untagged). The route runs along x between them."""
+    """A corridor along x between two wall slabs: y=4 is tagged class 1, y=16 untagged."""
     frame = GridFrame(bounds_min=np.zeros(3), cell_size=0.01, res_xyz=(30, 21, 8))
     occ = np.zeros(frame.res_xyz, np.uint8)
     occ[:, 4, :] = 1     # tagged wall
@@ -31,26 +30,26 @@ def _stack_two_walls():
 
 def test_tagged_wall_repels_route_untagged_does_not():
     s = _stack_two_walls()
-    # endpoints midway between the walls (y=10); zero DEFAULT clearance
+    # endpoints midway between the walls at y=10, with zero default clearance
     res = Solver().route_one(s, RouteRequest(
         wire=_wire(), start=tuple(s.frame.grid_to_world((1, 10, 4))),
         end=tuple(s.frame.grid_to_world((28, 10, 4))), connectivity=26, clearance_m=0.0,
         weights={"smoothing": 0.0, "bend": 0.0}))
     assert res.status == "routed"
-    # judge the MID-SPAN only: the terminals sit at y=10 and are legitimately exempted
-    # from the shell (terminal reachability), so cells near x=1 / x=28 may be at y=10.
+    # Judge the mid-span only. Terminals sit at y=10 and are exempt from the clearance
+    # shell so they stay reachable, so cells near x=1 and x=28 may legitimately be at y=10.
     mid = [c for c in res.cells if 9 <= c[0] <= 20]
     assert mid, "route has no mid-span cells"
     ys = [c[1] for c in mid]
-    # tagged wall at y=4 with 0.06 m (6 cells) clearance -> mid-span stays y >= 11
+    # tagged wall at y=4 with 0.06 m (6 cells) of clearance
     assert min(ys) >= 11, f"route entered the tagged wall's clearance band (min y={min(ys)})"
-    # untagged wall at y=16 has NO clearance -> approaching it is allowed
+    # untagged wall at y=16 has no clearance, so getting close to it is allowed
     assert max(ys) <= 15
 
 
 def test_default_clearance_still_applies_to_untagged():
     s = _stack_two_walls()
-    # default clearance 0.03 (3 cells) applies to the UNTAGGED wall only (class 0)
+    # the 0.03 m (3 cell) default applies to class-0 geometry only, so to the untagged wall
     res = Solver().route_one(s, RouteRequest(
         wire=_wire(), start=tuple(s.frame.grid_to_world((1, 10, 4))),
         end=tuple(s.frame.grid_to_world((28, 10, 4))), connectivity=26, clearance_m=0.03,
@@ -59,8 +58,8 @@ def test_default_clearance_still_applies_to_untagged():
     mid = [c for c in res.cells if 9 <= c[0] <= 20]
     assert mid
     ys = [c[1] for c in mid]
-    assert min(ys) >= 11          # tagged wall: its own 6-cell clearance
-    assert max(ys) <= 12          # untagged wall at 16: default 3 cells -> stay <= 12
+    assert min(ys) >= 11          # tagged wall keeps its own 6-cell clearance
+    assert max(ys) <= 12          # untagged wall at y=16 keeps the 3-cell default
 
 
 def test_grid_roundtrip_carries_clearance_classes(tmp_path):

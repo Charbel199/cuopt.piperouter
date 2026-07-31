@@ -1,17 +1,16 @@
-"""Pure waypoint-order helpers (omni-free, headless-testable).
+"""Waypoint-order helpers, kept omni-free so they can be tested without Kit.
 
-The per-wire `waypoints` list IS the route order (the solver routes
-start -> wp[0] -> wp[1] -> ... -> end), so reordering this list reorders the
-legs. Kept omni-free so the reorder math can be unit-tested without Kit.
+The per-wire `waypoints` list doubles as the route order (the solver routes
+start -> wp[0] -> wp[1] -> ... -> end), so reordering the list reorders the legs.
 """
 from __future__ import annotations
 
 
 def reorder(seq, src, dst):
-    """Return a NEW list with the item at index `src` moved to index `dst`.
+    """Return a new list with the item at index `src` moved to index `dst`.
 
-    Indices are clamped into range; equal/degenerate indices return a plain copy
-    (so a no-op drag never corrupts the list).
+    Indices are clamped into range, and degenerate indices return a plain copy so a
+    no-op drag cannot corrupt the list.
     """
     items = list(seq)
     n = len(items)

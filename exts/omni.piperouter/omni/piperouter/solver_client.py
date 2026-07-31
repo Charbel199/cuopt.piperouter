@@ -1,5 +1,4 @@
-"""Stdlib HTTP client for the M2 solver service (no third-party deps so it works in
-any Kit python)."""
+"""HTTP client for the solver service, stdlib-only so it works in any Kit python."""
 from __future__ import annotations
 
 import json

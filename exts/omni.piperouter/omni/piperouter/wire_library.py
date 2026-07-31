@@ -1,5 +1,7 @@
-"""Load the bundled wire/pipe library. The chosen type's full spec is sent in each
-route request, so the solver never needs its own copy to agree with the extension.
+"""Load the bundled wire/pipe library.
+
+The chosen type's full spec travels with every route request, so the solver never
+needs its own copy to agree with the extension.
 """
 from __future__ import annotations
 

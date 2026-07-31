@@ -1,5 +1,8 @@
-"""Kit entry point. Owns the RouterSession + grid session; exposes route/refine/
-overlay/tag operations to the panel. Thin: imports omni.* so it loads only in Kit.
+"""Kit entry point.
+
+Owns the RouterSession and the current grid session, and exposes the route, refine,
+overlay and tag operations to the panel. It imports omni.*, so it only loads in Kit;
+keep the real work in the omni-free modules.
 """
 from __future__ import annotations
 
@@ -42,9 +45,11 @@ class PipeRouterExtension(omni.ext.IExt):
         return self._sid
 
     def last_cell_size_m(self):
-        """Actual voxel edge length (METRES) from the last voxelization, or None. Lets the
-        panel show the REAL voxel size (matching the occupancy overlay) instead of a
-        pre-route estimate."""
+        """Return the voxel edge length in metres from the last voxelization, or None.
+
+        The panel shows this rather than a pre-route estimate, so the number matches the
+        occupancy overlay.
+        """
         s = getattr(self, "_session", None)
         g = getattr(s, "last_grids", None) if s else None
         return float(g[1]) if g else None
@@ -59,12 +64,15 @@ class PipeRouterExtension(omni.ext.IExt):
             return None, str(exc)
 
     def select_prim(self, path):
-        """Select a prim (e.g. a waypoint marker) so the user can find/drag it."""
+        """Select a single prim, such as a waypoint marker, so the user can drag it."""
         return self.select_prims([path])
 
     def select_prims(self, paths):
-        """Select several prims at once (e.g. a wire's start/end/waypoints + its tube)
-        so the whole wire highlights in the viewport when picked in the panel."""
+        """Select several prims at once, ignoring paths that are not in the stage.
+
+        Used to highlight a whole wire (start, end, waypoints and tube) in the viewport
+        when it is picked in the panel.
+        """
         try:
             stage = self._get_stage()
             valid = [p for p in paths
@@ -103,17 +111,16 @@ class PipeRouterExtension(omni.ext.IExt):
             return None, str(exc)
 
     def _frame_scene(self, stage):
-        """Fit the active viewport camera to show the whole scene.
+        """Fit the active viewport camera to the whole scene.
 
-        Tries the Kit command API first (most reliable), then falls back to
-        manually positioning the perspective camera based on the scene bounding box.
-        Fully guarded - a failure here is non-critical.
+        Prefers the Kit command API and falls back to positioning the perspective camera
+        by hand from the scene bounding box. Fully guarded, since failing to frame the
+        scene is cosmetic.
         """
         try:
             import numpy as np
             from pxr import Gf, Usd, UsdGeom
 
-            # Compute world bounding box of /World
             world = stage.GetPrimAtPath("/World")
             if not world or not world.IsValid():
                 return
@@ -128,21 +135,20 @@ class PipeRouterExtension(omni.ext.IExt):
             size   = rng.GetSize()
             diag   = float(Gf.Vec3d(*size).GetLength())
 
-            # --- Try Kit command approach first ---
             try:
                 import omni.usd
                 import omni.kit.commands
                 omni.usd.get_context().get_selection().set_selected_prim_paths(
                     ["/World"], True)
-                # Try several command names used in different Kit versions. Check the
-                # command is REGISTERED first - calling execute() on an unknown command
-                # makes the command subsystem log a noisy [Error] even when we catch it.
+                # Kit versions disagree on the command name. Check registration before
+                # calling: execute() on an unknown command makes the command subsystem
+                # log an [Error] even when the exception is caught here.
                 for cmd in ("FrameViewportSelection",
                             "FocusViewport",
                             "ViewportFrameSelection"):
                     try:
                         if omni.kit.commands.get_command_class(cmd) is None:
-                            continue   # not in this Kit build -> skip silently
+                            continue   # not in this Kit build
                         omni.kit.commands.execute(cmd)
                         carb.log_info(f"[piperouter] framed scene via command '{cmd}'")
                         omni.usd.get_context().get_selection().clear_selected_prim_paths()
@@ -153,8 +159,8 @@ class PipeRouterExtension(omni.ext.IExt):
             except Exception:
                 pass
 
-            # --- Fallback: move the perspective camera via USD ---
-            # Place it at ~1.5× the diagonal from the center, slightly above and back.
+            # Fallback: move the perspective camera through USD, placing it about 1.5
+            # bounding-box diagonals from the centre, slightly above and behind.
             cam_prim = stage.GetPrimAtPath("/OmniverseKit_Persp")
             if not cam_prim or not cam_prim.IsValid():
                 cam_prim = stage.GetPrimAtPath("/World/Camera")
@@ -190,7 +196,7 @@ class PipeRouterExtension(omni.ext.IExt):
             s = self._ensure_session(url)
             s.global_planner, s.local_optimizer = global_planner, local_optimizer
             clr = wires[0].get("clearance_m", 0.0) if wires else 0.0
-            self._voxelize(resolution, url, clearance_m=clr)   # bakes clearance into the grid
+            self._voxelize(resolution, url, clearance_m=clr)
             t_vox = _t.perf_counter()
             cell = s.last_grids[1] if getattr(s, "last_grids", None) else None
             self._clearance_note = None
@@ -238,10 +244,10 @@ class PipeRouterExtension(omni.ext.IExt):
         try:
             s = self._ensure_session(url)
             s.global_planner, s.local_optimizer = global_planner, local_optimizer
-            # always re-voxelize: the grid is framed to include all current markers,
-            # so a freshly-dragged waypoint (possibly beyond the geometry) is covered
+            # Always re-voxelize. The grid is framed around the current markers, so this
+            # is what covers a waypoint the user just dragged past the geometry.
             clr = float(wire.get("clearance_m", 0.0))
-            self._voxelize(resolution, url, clearance_m=clr)   # bakes clearance into the grid
+            self._voxelize(resolution, url, clearance_m=clr)
             cell = s.last_grids[1] if getattr(s, "last_grids", None) else None
             keepout = int(clr / cell + 0.5 + 1e-9) if cell else 0
             carb.log_info(f"[piperouter] re-route '{wire.get('name')}': "
@@ -256,10 +262,12 @@ class PipeRouterExtension(omni.ext.IExt):
             return None, None, str(exc)
 
     def show_overlay(self, resolution, url, mode, clearance_m=0.0):
-        """Author a debug point cloud under /World/PipeRouter/debug for the chosen
-        field. mode in {"none","occupancy","thermal","em"}. The occupancy cloud is
-        grown by `clearance_m` so it shows the actual keep-out volume (matching the
-        safety clearance the solver routes against)."""
+        """Author a debug point cloud for one field under /World/PipeRouter/debug.
+
+        `mode` is one of "none", "occupancy", "thermal" or "em". The occupancy cloud is
+        grown by `clearance_m` so it shows the keep-out volume the solver routes against
+        rather than the bare mesh.
+        """
         try:
             import numpy as np
             stage = self._get_stage()
@@ -272,11 +280,11 @@ class PipeRouterExtension(omni.ext.IExt):
                 return None
 
             s = self._ensure_session(url)
-            # reuse the grids from the last route (matches what the router saw, and
-            # avoids re-voxelizing); fall back to a fresh voxelize if not routed yet
+            # Reuse the grids from the last route so the overlay matches what the router
+            # saw, falling back to a fresh voxelize when nothing has been routed yet.
             grids = getattr(s, "last_grids", None)
             if grids is not None:
-                # occ is the RAW mesh now (clearance no longer baked) - re-dilate below
+                # occ holds the raw mesh, so the clearance halo is re-dilated below.
                 gbmin, cell, res, occ, _sd, thermal, em = grids
                 clr = float(getattr(s, "last_clearance_m", 0.0))
             else:
@@ -286,8 +294,8 @@ class PipeRouterExtension(omni.ext.IExt):
             ambient = 20.0
 
             if mode == "occupancy":
-                # show mesh + the clearance halo: untagged geometry dilated by the global
-                # default, each clearance-TAGGED class dilated by its own distance.
+                # Mesh plus clearance halo: untagged geometry is dilated by the global
+                # default, and each tagged class by its own distance.
                 from . import grid_io
                 occ_disp = occ > 0
                 cc_data = getattr(s, "last_clearance_classes", None)
@@ -301,7 +309,7 @@ class PipeRouterExtension(omni.ext.IExt):
                     ci = int(float(v) / float(cell) + 0.5) if cell else 0
                     m = cgrid == (i + 1)
                     occ_disp |= grid_io.dilate_mask(m, ci).astype(bool) if ci > 0 else m
-                mask, vals, lo = occ_disp, None, 0.0   # prohibited voxels (mesh + clearance)
+                mask, vals, lo = occ_disp, None, 0.0   # prohibited voxels: mesh + clearance
             elif mode == "thermal":
                 mask, vals, lo = thermal > ambient + 0.5, thermal, ambient
             elif mode == "em":
@@ -316,16 +324,16 @@ class PipeRouterExtension(omni.ext.IExt):
                 carb.log_warn(f"[piperouter] overlay '{mode}': nothing to show{hint}")
                 return f"overlay '{mode}': nothing to show{hint}"
 
-            # grid is in METERS; convert centres + point size back to stage units
+            # The grid is metric; convert centres and point size back to stage units.
             inv = 1.0 / float(getattr(s, "mpu", 1.0) or 1.0)
             centers = (gbmin + (ijk + 0.5) * cell) * inv
             cell_stage = cell * inv
-            cap = 200000  # subsample so a fine grid doesn't author millions of points
+            cap = 200000  # subsample so a fine grid does not author millions of points
             step = (len(centers) // cap + 1) if len(centers) > cap else 1
 
             if mode == "occupancy":
-                # ~0.85*cell so beads nearly fill their voxel and the overlay reads as a
-                # continuous occupied shell instead of sparse floating dots.
+                # At 0.85 of a cell the beads nearly fill their voxel, so the overlay
+                # reads as a continuous shell rather than sparse floating dots.
                 scene_ops.author_points(stage, scene_ops.DEBUG_SCOPE + "/occ",
                                         centers[::step], size=cell_stage * 0.85,
                                         color=(0.2, 0.6, 1.0))
@@ -333,9 +341,9 @@ class PipeRouterExtension(omni.ext.IExt):
                 v = vals[mask]
                 hi = max(float(v.max()), lo + 1e-6)
                 t01 = np.clip((v - lo) / (hi - lo), 0.0, 1.0)
-                if mode == "thermal":   # cold blue -> hot red
+                if mode == "thermal":   # cold blue to hot red
                     colors = np.stack([t01, np.full_like(t01, 0.1), 1.0 - t01], axis=1)
-                else:                   # em: low teal -> high magenta
+                else:                   # EM: low teal to high magenta
                     colors = np.stack([t01, 1.0 - t01, np.full_like(t01, 0.7)], axis=1)
                 scene_ops.author_colored_points(
                     stage, scene_ops.DEBUG_SCOPE + f"/{mode}",
@@ -350,7 +358,9 @@ class PipeRouterExtension(omni.ext.IExt):
 
     def show_wire_debug(self, wire, mode):
         """Author per-wire debug geometry under /World/PipeRouter/debug.
-        mode: "cells" | "raw_path" | "cost_terrain" | "clearance" | "bend_radius" | "none"
+
+        `mode` is one of "cells", "raw_path", "cost_terrain", "bend_radius", "octree" or
+        "none".
         """
         try:
             import numpy as np
@@ -358,8 +368,8 @@ class PipeRouterExtension(omni.ext.IExt):
             if stage is None:
                 return "no USD stage is open"
             scene_ops.clear_debug(stage)
-            # Always reset visibility first, so switching wires/modes never leaves a
-            # previously-hidden cable hidden.
+            # Reset visibility first, so switching wires or modes never leaves an
+            # earlier cable hidden.
             scene_ops.set_all_routes_visible(stage)
             if mode == "none" or not wire:
                 return None
@@ -367,16 +377,16 @@ class PipeRouterExtension(omni.ext.IExt):
             wire_name = wire.get("name", "?")
             spec = wire.get("spec", {})
             color = tuple(float(c) for c in spec.get("color", (0.8, 0.1, 0.1)))
-            # Hide this wire's final tube so the debug geometry below is clearly visible.
+            # Hide this wire's final tube so the debug geometry below is visible.
             scene_ops.hide_route(stage, wire_name)
 
             s = getattr(self, "_session", None)
             grids = getattr(s, "last_grids", None) if s else None
-            # The grids/polylines are in METERS (solver space); convert lengths back
-            # to stage units when authoring debug geometry so it lines up with the USD.
+            # Grids and polylines are in metres, which is solver space, so lengths are
+            # converted back to stage units before authoring any debug geometry.
             inv = 1.0 / float(getattr(s, "mpu", 1.0) or 1.0)
-            # the cable-representing debug curves use the wire's REAL diameter (same as the
-            # routed tube), so the debug view is to-scale rather than a fixed fat line.
+            # Debug curves that stand in for the cable use the wire's real diameter, the
+            # same as the routed tube, so the debug view stays to scale.
             _real_d = float(spec.get("outer_diameter_mm", 1.5)) / 1000.0
             dia_stage = (s._display_diameter_m(_real_d) if s else max(_real_d, 5e-4)) * inv
 
@@ -396,7 +406,8 @@ class PipeRouterExtension(omni.ext.IExt):
                     return "[piperouter] raw_path: no raw polyline (route first)"
                 poly = wire.get("polyline", [])
                 raw_s = (np.asarray(raw, dtype=np.float64) * inv).tolist()
-                # raw stair-step a bit thinner than the cable so the smooth tube reads over it
+                # The raw stair-step is drawn thinner than the cable so the smooth tube
+                # reads clearly on top of it.
                 scene_ops.author_raw_path(stage, wire_name + "_raw", raw_s,
                                           color=(0.9, 0.9, 0.1), width=dia_stage * 0.5)
                 if poly and len(poly) >= 2:
@@ -418,7 +429,7 @@ class PipeRouterExtension(omni.ext.IExt):
                 weights = wire.get("weights", {})
                 cost = ext_fields.soft_cost_field(sd, thermal, em, spec, weights)
 
-                # Build a mask of cells within CORRIDOR_R cells of the wire's path
+                # Mask of the cells within CORRIDOR_R cells of the wire's path.
                 CORRIDOR_R = 6
                 path_mask = np.zeros((nx, ny, nz), dtype=bool)
                 for ci, cj, ck in cells:
@@ -435,7 +446,7 @@ class PipeRouterExtension(omni.ext.IExt):
                 cv = cost[mask]
                 hi = float(cv.max()) + 1e-6
                 t01 = np.clip(cv / hi, 0.0, 1.0)
-                # blue (cheap near path) -> red (expensive near path)
+                # Blue is cheap, red expensive, relative to the costs near this path.
                 cols = np.column_stack([t01, 1.0 - t01, np.zeros_like(t01)])
                 scene_ops.author_colored_points(stage,
                     f"{scene_ops.DEBUG_SCOPE}/cost_{wire_name}", centres, cols,
@@ -458,8 +469,8 @@ class PipeRouterExtension(omni.ext.IExt):
                 scene_ops.set_all_routes_visible(stage)   # show the route inside the octree
                 gbmin, cell, res, occ, _sd, _th, _em = grids
                 gbmin = np.asarray(gbmin, dtype=np.float64)
-                # blocked = occupancy (clearance already baked) dilated by the wire radius,
-                # matching what the planner's octree sees.
+                # Dilating occupancy by the wire radius reproduces what the planner's
+                # octree sees.
                 rad_cells = int(round((_real_d * 0.5) / float(cell)))
                 blocked = occ.astype(bool)
                 if rad_cells > 0:
@@ -467,8 +478,9 @@ class PipeRouterExtension(omni.ext.IExt):
                 leaves, leaf_of = octree_viz.build_octree(blocked)
                 if not leaves:
                     return "[piperouter] octree: no free space in the grid"
-                # leaf wireframe boxes, coloured by size: small (fine, near surfaces) = warm,
-                # big (open air) = cool - so the adaptive resolution is obvious at a glance.
+                # Leaf wireframe boxes coloured by size, warm for the fine leaves near
+                # surfaces and cool for the big ones in open air, which makes the
+                # adaptive resolution visible at a glance.
                 sizes = [max(l[1] - l[0], l[3] - l[2], l[5] - l[4]) for l in leaves]
                 smax = max(sizes)
                 boxes, cols = [], []
@@ -476,12 +488,12 @@ class PipeRouterExtension(omni.ext.IExt):
                     mn = (gbmin + np.array([l[0], l[2], l[4]]) * cell) * inv
                     mx = (gbmin + np.array([l[1], l[3], l[5]]) * cell) * inv
                     boxes.append((tuple(mn), tuple(mx)))
-                    t = (sz - 1) / max(smax - 1, 1)        # 0 = finest, 1 = biggest
+                    t = (sz - 1) / max(smax - 1, 1)        # 0 is the finest leaf, 1 the biggest
                     cols.append((1.0 - 0.8 * t, 0.35 + 0.55 * t, 0.1 + 0.9 * t))
                 scene_ops.author_box_wireframe(
                     stage, f"{scene_ops.DEBUG_SCOPE}/octree_{wire_name}", boxes,
                     colors=cols, width=float(cell) * inv * 0.04)
-                # the band the fine lattice actually searches (needs the routed endpoints)
+                # The band the fine lattice searches, which needs the routed endpoints.
                 poly = wire.get("polyline")
                 band_n = 0
                 if poly and len(poly) >= 2:
@@ -508,11 +520,13 @@ class PipeRouterExtension(omni.ext.IExt):
             return str(exc)
 
     def slice_views(self, routes, target_px=1024):
-        """Render the XY/XZ/YZ projection images from the EXACT routing grid (last
-        voxelize), so the obstacles + clearance halo shown are precisely what the
-        router removed - the route can never appear to cross them. (Obstacles are at
-        the routing resolution; raise it for finer views + finer routing together.)
-        `routes` = [{"points": [[x,y,z],...], "color": (r,g,b)}]."""
+        """Render the XY, XZ and YZ projection images from the last voxelization.
+
+        Drawing from the routing grid itself means the obstacles shown are the ones the
+        router saw, so a route can never appear to cross one. They are drawn at the
+        routing resolution, so raising resolution sharpens the views and the routes
+        together. `routes` is [{"points": [[x,y,z], ...], "color": (r,g,b)}].
+        """
         try:
             from . import slices
             s = self._ensure_session(self._url or "http://localhost:8000")
@@ -520,8 +534,8 @@ class PipeRouterExtension(omni.ext.IExt):
             if grids is None:
                 return None, "route first (no voxel grids yet)"
             gbmin, cell, res, occ, _sd, thermal, em = grids
-            # occ already includes the clearance keep-out (baked in compute_grids),
-            # so there's no separate halo to draw - show the prohibited voxels as-is
+            # occ is the raw mesh, so these views show geometry without the clearance
+            # halo the solver adds on top.
             imgs = slices.render_views(gbmin, cell, res, occ, thermal, routes,
                                        target_px=target_px)
             return imgs, None
@@ -530,8 +544,10 @@ class PipeRouterExtension(omni.ext.IExt):
             return None, str(exc)
 
     def create_view_camera(self, plane):
-        """Create/position a camera looking along the given axis and make it the active
-        viewport camera. plane in {"xy"(top), "xz"(front), "yz"(side)}."""
+        """Point a camera along one axis and make it the active viewport camera.
+
+        `plane` is "xy" for the top view, "xz" for the front, "yz" for the side.
+        """
         try:
             import numpy as np
             from pxr import Gf, UsdGeom
@@ -553,7 +569,8 @@ class PipeRouterExtension(omni.ext.IExt):
             eye = center + np.asarray(offset, float)
             path = f"{scene_ops.PIPEROUTER_ROOT}/cameras/{plane}"
             cam = UsdGeom.Camera.Define(stage, path)
-            # hide the camera gizmo in the viewport (still usable as a viewport camera)
+            # Hiding the prim removes the camera gizmo from the viewport; it still works
+            # as a viewport camera.
             UsdGeom.Imageable(cam).CreateVisibilityAttr().Set(UsdGeom.Tokens.invisible)
             view = Gf.Matrix4d().SetLookAt(
                 Gf.Vec3d(*[float(x) for x in eye]),
@@ -612,4 +629,4 @@ class PipeRouterExtension(omni.ext.IExt):
         if getattr(self, "_panel", None):
             self._panel.destroy()
             self._panel = None
-        self._session = None  # drop the RouterSession reference too
+        self._session = None

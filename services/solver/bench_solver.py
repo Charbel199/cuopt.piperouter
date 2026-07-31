@@ -1,7 +1,8 @@
-"""Solver-only GPU benchmark - NO extension / Warp / pxr deps, so it runs INSIDE the
-solver container where cupy + cuGraph are installed (and on the dev box if cupy is present).
-It loads a pre-saved voxel grid (the same GridStack the extension hands off on disk) plus a
-list of endpoint cells, then times each global planner. Reports which GPU backend is live.
+"""Time every global planner on a pre-saved voxel grid, and report which backend is live.
+
+Solver-only: no extension, Warp or pxr import, so it runs inside the solver container
+where cupy and cuGraph are installed. Takes the GridStack the extension hands off on
+disk plus a list of endpoint cells.
 
 Usage:
     PIPEROUTER_GPU_BUILD=1 python3 bench_solver.py <grid.npz> <endpoints.json>
@@ -13,7 +14,6 @@ import os
 import sys
 import time
 
-from piperouter_solver import planners
 from piperouter_solver.grids import GridStack
 from piperouter_solver.models import RouteRequest, WireType
 from piperouter_solver.solver import Solver
@@ -25,7 +25,7 @@ def _backend():
     import importlib.util
     has_cupy = importlib.util.find_spec("cupy") is not None
     has_cugraph = importlib.util.find_spec("cugraph") is not None
-    # confirm cuGraph is actually used by the SSSP backend (not just importable)
+    # Importable is not enough; check cuGraph and cudf actually load.
     cugraph_live = False
     if has_cugraph:
         try:

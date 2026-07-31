@@ -1,8 +1,8 @@
-"""Voxel-grid framing + .npz writer.
+"""Voxel-grid framing and .npz writer.
 
-Writes exactly the keys `piperouter_solver.grids.GridStack.load` expects, so the
-extension never needs to import the solver package - the file on the shared dir is
-the contract.
+Writes exactly the keys `piperouter_solver.grids.GridStack.load` expects. The file on
+the shared directory is the contract between the two sides, so the extension never
+imports the solver package.
 """
 from __future__ import annotations
 
@@ -10,8 +10,10 @@ import numpy as np
 
 
 def frame_from_bounds(bounds_min, bounds_max, resolution: int):
-    """Cubic cells sized from the longest axis / resolution, bounds padded to fit
-    evenly. Mirrors piperouter_solver.models.GridFrame.from_bounds."""
+    """Frame cubic cells sized as longest axis / resolution, padding bounds to fit.
+
+    Mirrors piperouter_solver.models.GridFrame.from_bounds; the two must agree.
+    """
     bmin = np.asarray(bounds_min, dtype=np.float64)
     bmax = np.asarray(bounds_max, dtype=np.float64)
     extent = bmax - bmin
@@ -25,9 +27,11 @@ def frame_from_bounds(bounds_min, bounds_max, resolution: int):
 
 
 def dilate_mask(mask, cells):
-    """6-connectivity binary dilation by `cells` iterations, in pure numpy (Kit's
-    Python may not ship scipy). Used to grow the occupancy overlay by the safety
-    clearance so the debug cloud matches the keep-out volume the solver routes against.
+    """Dilate a binary mask by `cells` iterations with 6-connectivity.
+
+    Pure numpy because Kit's Python may not ship scipy. Grows the occupancy overlay by
+    the safety clearance so the debug cloud matches the keep-out volume the solver
+    routes against.
     """
     out = np.asarray(mask, dtype=bool)
     for _ in range(int(cells)):
@@ -46,12 +50,12 @@ def save_grids(path, bounds_min, cell_size, res_xyz, occupancy, surface_dist,
                thermal, em, clearance_class=None, clearance_values=None) -> None:
     extra = {}
     if clearance_class is not None and clearance_values:
-        # per-object clearance: class grid (0 = untagged) + metres per class id (1-based)
+        # Per-object clearance: class grid (0 = untagged), plus metres per class id,
+        # indexed 1-based.
         extra["clearance_class"] = np.asarray(clearance_class, dtype=np.uint8)
         extra["clearance_values"] = np.asarray(clearance_values, dtype=np.float64)
-    # Uncompressed on purpose: the file lives on tmpfs (/dev/shm), so zlib would only
-    # burn CPU on both sides of the handoff - at high resolution that's ~1 GB of
-    # compress here + inflate in the solver per ROUTE ALL, for zero I/O benefit.
+    # Uncompressed on purpose: the file lives on tmpfs (/dev/shm), so zlib would burn
+    # CPU on both sides of the handoff for no I/O benefit.
     np.savez(
         path,
         bounds_min=np.asarray(bounds_min, dtype=np.float64),

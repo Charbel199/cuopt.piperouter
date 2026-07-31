@@ -111,7 +111,7 @@ def test_solve_with_locked_route_forces_detour(client):
     locked_cells = {(5, j, 1) for j in range(1, 10)}
     route_cells = {s.frame.world_to_grid(p) for p in out["polyline"]}
     assert route_cells.isdisjoint(locked_cells)
-    # sanity: the unlocked straight route WOULD have used (5,5,1)
+    # sanity: the straight unlocked route would have gone through (5,5,1)
     assert (5, 5, 1) in locked_cells
 
 

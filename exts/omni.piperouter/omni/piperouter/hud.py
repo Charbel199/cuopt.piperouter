@@ -1,13 +1,8 @@
-"""Viewport heads-up display - a semi-transparent stats box in the top-right corner
-of the active viewport, styled like the Kit FPS counter.
+"""Viewport heads-up display: a semi-transparent stats box over the active viewport.
 
-Shows two panels:
-  • Route Stats  - total cost / mass / length / wires-routed (updated after every Route All)
-  • Selected Wire - name, type, and current soft-weight sliders (updates when a wire is
-                    selected or its weights change)
-
-All viewport calls are guarded: if the viewport API is unavailable the HUD silently
-does nothing. Mirrors the defensive pattern in viewport_labels.py.
+Styled like the Kit FPS counter. Shows total cost, mass, length and wires routed,
+refreshed after every Route All. All viewport calls are guarded, so if the viewport API
+is unavailable the HUD quietly does nothing.
 """
 from __future__ import annotations
 
@@ -15,7 +10,7 @@ import carb
 
 _FRAME_ID = "omni.piperouter.hud"
 
-# ABGR colors
+# Colors are ABGR.
 _BG       = 0xCC0A0A0A   # semi-transparent near-black
 _GREEN    = 0xFF76B900   # NVIDIA green
 _LABEL    = 0xFF999999   # dim label
@@ -30,7 +25,7 @@ class ViewportHUD:
     def __init__(self):
         self._frame = None
         self._visible = True
-        self._warned_draw = False  # warn once on draw failure (else it spams per frame)
+        self._warned_draw = False  # a draw failure recurs every frame, so warn once
 
     # ------------------------------------------------------------------
     def _ensure_frame(self):
@@ -51,9 +46,9 @@ class ViewportHUD:
     def update(self, stats: dict, selected_wire: dict | None):
         """Rebuild the HUD.
 
-        stats keys (all optional, show '-' if missing):
-            total_cost, total_mass, total_length, n_routed, n_total, n_no_path
-        selected_wire: the panel wire dict for the currently selected wire, or None.
+        Every `stats` key is optional and renders as '-' when missing: total_cost,
+        total_mass, total_length, n_routed, n_total, n_no_path. `selected_wire` is the
+        panel wire dict for the current selection, or None.
         """
         if not self._visible:
             return
@@ -72,7 +67,7 @@ class ViewportHUD:
                 carb.log_warn(f"[piperouter] HUD draw failed (silencing further): {exc}")
 
     def _build(self, ui, stats, wire):
-        # Push to bottom-right corner
+        # Spacers push the box into the bottom-right corner.
         with ui.VStack():
             ui.Spacer()
             with ui.HStack(height=0):
@@ -92,7 +87,7 @@ class ViewportHUD:
             ui2.Rectangle(style={"background_color": _BG, "border_radius": 8,
                                   "border_width": 1, "border_color": 0xFF333333})
             with ui2.VStack(spacing=0):
-                # title bar
+                # Title bar.
                 with ui2.HStack(height=32):
                     ui2.Spacer(width=10)
                     ui2.Rectangle(width=4, height=18,

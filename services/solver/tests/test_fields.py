@@ -18,7 +18,7 @@ def _wire(em_sens=0.5, max_temp=100.0):
     )
 
 
-# --- Task 4: neighbor offsets ---
+# --- neighbor offsets ---
 
 def test_connectivity_counts():
     assert len(neighbor_offsets(6)) == 6
@@ -39,7 +39,7 @@ def test_six_connectivity_is_axis_only():
     assert (1, 1, 0) not in offs  # no face-diagonals in 6-connectivity
 
 
-# --- Task 5: soft cost field + melt mask ---
+# --- soft cost field and melt mask ---
 
 def test_normalize_maps_to_unit_interval():
     a = np.array([0.0, 5.0, 10.0], dtype=np.float32)
@@ -78,7 +78,7 @@ def test_melt_mask_flags_cells_above_rating(empty_stack):
     assert not mask[0, 0, 0]
 
 
-# --- Task 6: turn penalty ---
+# --- turn penalty ---
 
 def test_straight_travel_has_zero_penalty():
     assert turn_penalty((1, 0, 0), (1, 0, 0), min_bend_radius_mm=50.0, cell_size_mm=100.0) == 0.0
@@ -91,8 +91,8 @@ def test_sharper_turn_costs_more_than_gentler_turn():
 
 
 def test_sub_radius_turn_penalised_far_more_than_above_radius():
-    # Same turn + same cell size: a wire whose min bend radius is BELOW the implied
-    # radius (no sub-radius penalty) costs less than one whose min radius is ABOVE it.
+    # Same turn, same cell size. A wire whose min bend radius is under the radius the turn
+    # implies pays no sub-radius penalty, so it costs less than one whose min radius is over.
     above = turn_penalty((1, 0, 0), (1, 1, 0), min_bend_radius_mm=10.0, cell_size_mm=100.0)
     below = turn_penalty((1, 0, 0), (1, 1, 0), min_bend_radius_mm=400.0, cell_size_mm=100.0)
     assert below > above

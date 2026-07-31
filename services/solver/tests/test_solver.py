@@ -21,9 +21,8 @@ def test_routes_straight_line_in_open_grid(empty_stack):
     res = Solver().route_one(s, req)
     assert res.status == "routed"
     assert len(res.polyline) >= 2
-    # length is roughly the straight span (~0.8 m). The default smoothing pass keeps a
-    # straight line straight but introduces sub-micron numerical variation, so the
-    # lower bound has a hair of slack below the exact span.
+    # The straight span is ~0.8 m; smoothing leaves it straight but adds sub-micron
+    # numerical drift, hence the slack on the lower bound.
     assert 0.79 <= res.length_m <= 1.2
 
 
@@ -72,12 +71,12 @@ def test_entirely_blocked_scene_is_no_path(empty_stack):
     end = tuple(s.frame.grid_to_world((7, 7, 1)))
     res = Solver().route_one(s, RouteRequest(wire=_wire(), start=start, end=end,
                                              connectivity=26))
-    assert res.status == "no_path"   # endpoints buried, no free neighbour -> no route
+    assert res.status == "no_path"   # endpoints buried with no free neighbour
 
 
 def test_endpoint_on_surface_still_routes(empty_stack):
     s = empty_stack
-    s.occupancy[5, 5, 1] = 1  # a single occupied cell; start sits ON it (a connector)
+    s.occupancy[5, 5, 1] = 1  # a single occupied cell; the start sits on it, like a connector
     start = tuple(s.frame.grid_to_world((5, 5, 1)))
     end = tuple(s.frame.grid_to_world((0, 0, 1)))
     res = Solver().route_one(s, RouteRequest(wire=_wire(), start=start, end=end,
@@ -86,8 +85,8 @@ def test_endpoint_on_surface_still_routes(empty_stack):
 
 
 def test_route_interior_never_enters_clearance_zone():
-    # the route's interior cells must all be OUTSIDE the (radius+clearance) keep-out -
-    # clearance is hard. (Endpoints may sit on a surface, so they're excluded.)
+    # Clearance is a hard constraint: every interior cell stays outside the
+    # (radius + clearance) keep-out. Endpoints may sit on a surface, so they are exempt.
     from piperouter_solver.grids import GridStack
     from piperouter_solver.models import GridFrame
     frame = GridFrame(bounds_min=np.zeros(3), cell_size=0.1, res_xyz=(20, 20, 3))
@@ -113,19 +112,19 @@ def test_clearance_does_not_relocate_a_near_surface_endpoint(empty_stack):
     s.occupancy[5, :, :] = 1  # wall at x=5; start one cell away on the x<5 side
     start = tuple(s.frame.grid_to_world((4, 5, 1)))
     end = tuple(s.frame.grid_to_world((0, 5, 1)))
-    # clearance 0.25 m puts the start inside the wall's clearance BAND (but not the mesh).
-    # Clearance must NOT relocate it (only the mesh does) - it routes from the real start,
-    # passing through the near-surface clearance voxels, with no relocation note.
+    # Clearance 0.25 m puts the start inside the wall's clearance band but not the mesh.
+    # Only mesh burial relocates an endpoint, so the route leaves from the real start and
+    # passes through the near-surface clearance voxels.
     res = Solver().route_one(s, RouteRequest(wire=_wire(), start=start, end=end,
                                              connectivity=26, clearance_m=0.25))
     assert res.status == "routed"
     assert res.note == ""                                   # clearance never pushes endpoints
-    assert np.allclose(res.polyline[0], start, atol=2 * s.frame.cell_size)  # starts AT start
+    assert np.allclose(res.polyline[0], start, atol=2 * s.frame.cell_size)
 
 
 def test_mesh_buried_endpoint_still_relocates(empty_stack):
     s = empty_stack
-    s.occupancy[5, 5, 1] = 1                                # bury the START in the MESH
+    s.occupancy[5, 5, 1] = 1                                # bury the start inside the mesh
     start = tuple(s.frame.grid_to_world((5, 5, 1)))
     end = tuple(s.frame.grid_to_world((9, 5, 1)))
     res = Solver().route_one(s, RouteRequest(wire=_wire(), start=start, end=end,
@@ -197,9 +196,10 @@ def test_route_all_orders_by_priority_and_avoids_earlier(empty_stack):
 
 
 def _cuts_edge(a, b, occ):
-    """True if a->b is a 2D EDGE diagonal (exactly two non-zero components) that
-    squeezes between two occupied face cells. The relaxed rule forbids exactly this;
-    3D corner moves are intentionally allowed, so they are not checked here."""
+    """True if a->b is a 2D edge diagonal that squeezes between two occupied face cells.
+
+    3D corner moves are allowed by design, so they are not checked here.
+    """
     off = tuple(int(b[i] - a[i]) for i in range(3))
     axes = [i for i in range(3) if off[i] != 0]
     if len(axes) != 2:
@@ -236,7 +236,7 @@ def test_no_path_reason_thermal(empty_stack):
     res = Solver().route_one(s, RouteRequest(wire=_wire(max_temp=90.0), start=start,
                                              end=end, connectivity=26))
     assert res.status == "no_path"
-    assert "rating" in res.reason and "300C" in res.reason   # thermal explanation
+    assert "rating" in res.reason and "300C" in res.reason
 
 
 def test_no_path_reason_buried_in_geometry(empty_stack):
@@ -269,7 +269,7 @@ def test_routed_polyline_connects_to_markers(empty_stack):
     res = Solver().route_one(s, RouteRequest(wire=_wire(), start=start, end=end,
                                              connectivity=26, weights={"smoothing": 0.0}))
     assert res.status == "routed"
-    # the polyline must START at the start marker and END at the end marker exactly
+    # the polyline must land exactly on both markers, not just near them
     assert np.allclose(res.polyline[0], start)
     assert np.allclose(res.polyline[-1], end)
 
@@ -316,8 +316,8 @@ def test_pinned_start_heading_forces_first_move_direction(empty_stack):
     )
     res = Solver().route_one(s, req)
     assert res.status == "routed"
-    # the source connects to a NEIGHBOR of the start cell, so cells[0] is already the
-    # first move; pinned +Y means it must leave with y greater than the start cell's y.
+    # The source connects to a neighbour of the start cell, so cells[0] is already the
+    # first move; a pinned +Y heading means it leaves above the start cell's y.
     start_cell = s.frame.world_to_grid(start)
     assert res.cells[0][1] > start_cell[1]
 
@@ -336,10 +336,9 @@ def test_impossible_heading_is_no_path(empty_stack):
 
 
 def test_route_all_keeps_tube_bodies_apart(empty_stack):
-    # Two OD-24mm pipes with endpoints 2 cells (20mm) apart: their tubes need 24mm of
-    # centerline separation, so the second route must BOW AWAY mid-span instead of
-    # running parallel and interpenetrating (the old code only blocked the 1-cell
-    # centerline, so tubes overlapped at fine resolutions).
+    # Two 24 mm OD pipes with endpoints 2 cells (20 mm) apart. Their bodies need 24 mm of
+    # centerline separation, so the second route has to bow away mid-span rather than run
+    # parallel and interpenetrate.
     import numpy as np
     from piperouter_solver.grids import GridStack
     from piperouter_solver.models import GridFrame
@@ -367,8 +366,8 @@ def test_route_all_keeps_tube_bodies_apart(empty_stack):
 
 
 def test_waypoint_in_clearance_band_still_routes(empty_stack):
-    # A waypoint 3 cells above a floor, inside a 6-cell clearance band: the shell must be
-    # waived around WAYPOINTS like endpoints, so the route passes through it (was no_path).
+    # A waypoint 3 cells above the floor sits inside the 6-cell clearance band. The shell
+    # is waived around waypoints as it is around endpoints, so the route still gets there.
     import numpy as np
     from piperouter_solver.grids import GridStack
     from piperouter_solver.models import GridFrame
@@ -389,8 +388,8 @@ def test_waypoint_in_clearance_band_still_routes(empty_stack):
 
 
 def test_no_path_reason_names_clearance_not_phantom_wire(empty_stack):
-    # A corridor sealed by CLEARANCE alone (no other wires) must not be blamed on
-    # "another already-routed wire" (the shell used to be folded into extra_obstacles).
+    # A corridor sealed by clearance alone, with no other wires in the scene, must be
+    # reported as a clearance failure and not blamed on "another already-routed wire".
     import numpy as np
     from piperouter_solver.grids import GridStack
     from piperouter_solver.models import GridFrame

@@ -1,6 +1,8 @@
-"""Axis-label <-> unit-vector mapping for pinned departure/arrival headings, plus
-azimuth/elevation <-> vector conversions for the CUSTOM (rotatable-gizmo) heading mode.
-Kept omni-free so it can be unit-tested headless and imported by the panel."""
+"""Heading conversions for pinned departure/arrival directions.
+
+Maps axis labels to unit vectors, and azimuth/elevation to vectors for the Custom
+(rotatable-gizmo) heading mode. Omni-free so it can be tested headless.
+"""
 from __future__ import annotations
 
 import math
@@ -16,23 +18,31 @@ _VECTORS = {
 
 
 def axis_to_vector(label):
-    """Unit vector tuple for an axis label; None for 'None' AND for 'Custom' (the
-    custom direction is read from the marker's rotation, not from the label)."""
+    """Return the unit vector for an axis label, or None.
+
+    'Custom' also yields None: its direction comes from the marker's rotation rather
+    than from the label.
+    """
     return _VECTORS.get(label)
 
 
 def _ground_axes(up_axis):
-    """(forward, side, up) world unit vectors for azimuth/elevation, given the stage
-    up-axis letter. Azimuth 0 = forward, measured toward side; elevation measured
-    toward up. Y-up: forward=+X, side=+Z. Z-up: forward=+X, side=+Y."""
+    """Return (forward, side, up) world unit vectors for the stage up-axis letter.
+
+    Azimuth 0 points along forward and is measured toward side; elevation is measured
+    toward up. Y-up gives forward=+X, side=+Z; Z-up gives forward=+X, side=+Y.
+    """
     if str(up_axis).upper() == "Y":
         return (1.0, 0.0, 0.0), (0.0, 0.0, 1.0), (0.0, 1.0, 0.0)
     return (1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0)
 
 
 def angles_to_vector(azimuth_deg, elevation_deg, up_axis="Z"):
-    """Unit world vector from azimuth (degrees around the up-axis, 0 = +X) and
-    elevation (degrees toward the up-axis, +90 = straight up)."""
+    """Return the unit world vector for an azimuth/elevation pair.
+
+    Azimuth is degrees around the up-axis with 0 = +X; elevation is degrees toward the
+    up-axis, so +90 points straight up.
+    """
     az = math.radians(float(azimuth_deg))
     el = math.radians(float(elevation_deg))
     f, s, u = _ground_axes(up_axis)
@@ -42,8 +52,10 @@ def angles_to_vector(azimuth_deg, elevation_deg, up_axis="Z"):
 
 
 def vector_to_angles(v, up_axis="Z"):
-    """(azimuth_deg, elevation_deg) of a world vector - inverse of angles_to_vector.
-    A (near-)zero vector maps to (0, 0)."""
+    """Return (azimuth_deg, elevation_deg) of a world vector.
+
+    Inverse of angles_to_vector. A near-zero vector maps to (0, 0).
+    """
     f, s, u = _ground_axes(up_axis)
     x = sum(float(v[i]) * f[i] for i in range(3))
     y = sum(float(v[i]) * s[i] for i in range(3))

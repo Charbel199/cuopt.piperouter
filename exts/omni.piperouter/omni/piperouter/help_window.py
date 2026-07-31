@@ -1,11 +1,11 @@
-"""In-app Help / Tutorial window for PipeRouter.
+"""In-app help and tutorial window.
 
-Shown once on extension startup (toggleable via a persisted setting) and reopened by the
-'?' button in the panel header. omni.ui only and fully guarded - a UI hiccup here never
-blocks routing.
+Shown once on extension startup, subject to a persisted setting, and reopened by the '?'
+button in the panel header. It is omni.ui only and fully guarded, so a UI hiccup here
+never blocks routing.
 
-Layout is scannable, not a wall of text: a 3-step Quick Start strip up top, then an
-accordion of short bulleted sections the user expands on demand.
+The layout aims to be scannable rather than a wall of text: a three-step Quick Start
+strip on top, then an accordion of short bulleted sections opened on demand.
 """
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ import carb
 
 _SETTING = "/persistent/exts/omni.piperouter/showHelpOnStartup"
 
-# palette (ABGR)
+# Palette, in ABGR.
 _GREEN = 0xFF76B900   # NVIDIA green accent
 _WHITE = 0xFFEEEEEE
 _GREY = 0xFF9A9A9A
@@ -22,7 +22,7 @@ _CARD = 0xFF2B2B2B
 _LINE = 0xFF3A3A3A
 _BLUE = 0xFF2A7DBE
 
-# Quick Start: (step, title, detail) - the 30-second overview, always visible.
+# Quick Start rows of (step, title, detail); always visible.
 _QUICK = [
     ("1", "Build", "Create a sample scene, or open your own .usd"),
     ("2", "Place", "+ Add wire, drag the green & red markers"),
@@ -181,8 +181,9 @@ class HelpWindow:
                 for b in bullets:
                     with ui.HStack(spacing=8, height=0):
                         ui.Spacer(width=4)
-                        # font-independent bullet: a small green square, top-aligned to the
-                        # first text line (avoids the '?' glyph fallback for "•")
+                        # Font-independent bullet: a small green square top-aligned to
+                        # the first text line. A literal bullet character renders as a
+                        # '?' glyph in some Kit fonts.
                         with ui.VStack(width=6, height=0):
                             ui.Spacer(height=6)
                             ui.Rectangle(width=5, height=5,

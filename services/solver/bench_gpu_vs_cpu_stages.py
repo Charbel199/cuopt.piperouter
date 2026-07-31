@@ -1,10 +1,13 @@
-"""Per-stage GPU-vs-CPU benchmark of the routing solve. Runs INSIDE the container.
-Usage: python3 bench_stages.py <stack.npz> <bench.json> <gpu|cpu>
-Wraps the production code path (octree_lattice + fibre) with timers; CPU mode forces
-numpy edge-build, scipy Dijkstra SSSP and scipy smoothing on the same machine."""
+"""Per-stage GPU-vs-CPU benchmark of the routing solve. Runs inside the container.
+
+Wraps the production code path with timers and prints a single BENCH_JSON line. In cpu
+mode the same machine is forced onto numpy edge build, scipy Dijkstra SSSP and scipy
+smoothing, so the two runs differ only in backend.
+
+Usage: python3 bench_gpu_vs_cpu_stages.py <stack.npz> <bench.json> <gpu|cpu> [planner]
+"""
 import json, os, sys, time
 
-import numpy as np
 
 mode = sys.argv[3]
 PLANNER = sys.argv[4] if len(sys.argv) > 4 else "octree_lattice"
@@ -56,11 +59,11 @@ for w in bench["wires"]:
         global_planner=PLANNER,
         clearance_m=float(bench.get("clearance_m", 0.0))))
 
-# warm-up (JIT, cuda context, caches) on the first wire, then reset and measure
+# Warm up JIT, CUDA context and caches on the first wire, then reset and measure.
 Solver().route_one(stack, reqs[0])
 for c in ("_octree_cache", "_dilate_cache", "_cls_dilate_cache",
           "_norm_fields", "_soft_cache", "_melt_cache"):
-    stack.__dict__.pop(c, None)               # measure every build/cache honestly once
+    stack.__dict__.pop(c, None)               # so each build/cache is timed once
 for k in T: T[k] = 0.0
 
 t0 = time.perf_counter()

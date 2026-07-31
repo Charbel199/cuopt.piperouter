@@ -21,7 +21,7 @@ def test_waypoint_marker_is_wireframe_and_roundtrips_position():
     s = _stage()
     path = "/World/PipeRouter/markers/w0_wp0"
     scene_ops.spawn_waypoint_marker(s, path, (1.0, 2.0, 3.0), radius=0.05, segments=24)
-    # it's a wireframe gizmo (BasisCurves: 3 closed rings), not a solid sphere
+    # A wireframe gizmo (BasisCurves, 3 closed rings), not a solid sphere.
     crv = UsdGeom.BasisCurves(s.GetPrimAtPath(path))
     assert crv
     assert list(crv.GetCurveVertexCountsAttr().Get()) == [24, 24, 24]
@@ -30,9 +30,9 @@ def test_waypoint_marker_is_wireframe_and_roundtrips_position():
 
 
 def test_bend_heatmap_flags_sharp_corner_on_coarse_path():
-    # a 90 deg corner over long (0.5 m) segments, min bend 55 mm. The chord-based radius
-    # would read this coarse corner as a gentle arc; resampling to the bend radius must
-    # still flag it RED (this was the "no hotspots with smoothing 0" bug).
+    # A 90 degree corner over long (0.5 m) segments, min bend radius 55 mm. A radius
+    # measured from the raw chords reads a corner this coarse as a gentle arc, so the
+    # heatmap has to resample at the bend radius and flag the corner red.
     s = _stage()
     poly = [(0.0, 0.0, 0.0), (0.5, 0.0, 0.0), (0.5, 0.5, 0.0)]
     scene_ops.author_bend_heatmap(s, "t", poly, min_bend_radius_mm=55.0)
@@ -70,7 +70,7 @@ def test_author_tube_creates_curve_with_points():
 
 def test_author_colored_points_per_point_color():
     s = _stage()
-    # rendered as BasisCurves stubs (2 verts/point) so the RTX viewport actually draws them
+    # Rendered as BasisCurves stubs (2 verts per point) so the RTX viewport draws them.
     p = scene_ops.author_colored_points(
         s, scene_ops.DEBUG_SCOPE + "/thermal",
         [(0, 0, 0), (1, 0, 0)], [(1, 0, 0), (0, 0, 1)], size=0.05)
@@ -136,23 +136,23 @@ def test_list_and_clear_tags():
 
 
 def test_tag_source_uses_box_center_not_origin():
-    # author_box_mesh bakes geometry into world points with an identity xform, so the
-    # heat source must come from the bbox CENTRE, not the (0,0,0) xform translation.
+    # author_box_mesh bakes geometry into world points under an identity xform, so the
+    # heat source has to come from the bbox centre, not the xform translation.
     s = _stage()
     box = scene_ops.author_box_mesh(s, "/World/Hot", center=(5.0, 5.0, 1.0),
                                     size=(2.0, 2.0, 2.0))
     scene_ops.write_tags(box.GetPrim(), temp_c=120.0)
     (center, temp, _em, char) = scene_ops.read_thermal_em_tags(s)[0]
     assert temp == 120.0
-    assert np.allclose(center, [5.0, 5.0, 1.0], atol=1e-3)   # NOT the origin
+    assert np.allclose(center, [5.0, 5.0, 1.0], atol=1e-3)   # not the origin
     assert char > 1.0                                        # ~half the bbox diagonal
 
 
 def test_tagging_an_instance_proxy_tags_exactly_that_prim():
-    # Greyed-out prims in instanced CAD are INSTANCE PROXIES - USD forbids authoring
-    # attributes on them, so proxy tags go into a path-keyed registry (customData on the
-    # PipeRouter root). The tag applies to EXACTLY the selected prim: the same part in a
-    # SIBLING instance stays untagged, and nothing is written on the parent/instance.
+    # USD forbids authoring attributes on instance proxies, which is what the greyed-out
+    # prims of instanced CAD are, so proxy tags go into a path-keyed registry in
+    # customData on the PipeRouter root. A tag applies to the selected proxy alone: the
+    # same part in a sibling instance stays untagged.
     from pxr import Usd, UsdGeom
     stage = Usd.Stage.CreateInMemory()
     UsdGeom.Xform.Define(stage, "/World")
@@ -168,17 +168,17 @@ def test_tagging_an_instance_proxy_tags_exactly_that_prim():
     proxy_a = next(p for p in proxies if str(p.GetPath()).startswith("/World/a"))
     proxy_b = next(p for p in proxies if str(p.GetPath()).startswith("/World/b"))
 
-    # tagging the PROXY must not raise, and must not author on the instance root
+    # Tagging the proxy must not raise, and must not author on the instance root.
     scene_ops.write_tags(proxy_a, clearance_m=0.05, temp_c=90.0)
     root_a = stage.GetPrimAtPath("/World/a")
     assert not root_a.GetAttribute(scene_ops.CLEARANCE_ATTR).HasAuthoredValue()
 
-    # the reader resolves the proxy's own path from the registry
+    # The reader resolves the proxy's own path from the registry.
     assert abs(scene_ops.clearance_for_prim(proxy_a) - 0.05) < 1e-9
-    # the SIBLING instance's identical part is NOT tagged
+    # The identical part in the sibling instance stays untagged.
     assert scene_ops.clearance_for_prim(proxy_b) is None
 
-    # it shows in the tag list, feeds the thermal reader, and clears cleanly
+    # It shows in the tag list, feeds the thermal reader, and clears cleanly.
     listed = {t["path"]: t for t in scene_ops.list_tagged_prims(stage)}
     assert str(proxy_a.GetPath()) in listed
     assert listed[str(proxy_a.GetPath())]["temp_c"] == 90.0

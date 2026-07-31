@@ -48,14 +48,14 @@ def test_collision_avoided_never_enters_occupied(wall_stack):
 
 def test_gentle_bend_preferred_over_sharp(empty_stack):
     s = empty_stack
-    # force a turn by routing diagonally; a stiff wire should take a path at
-    # least as long as a floppy one (higher min bend radius => more turn cost)
+    # A diagonal target forces a turn. A stiff wire (larger min bend radius, so more turn
+    # cost) trades length for gentleness, giving a path at least as long as a floppy one.
     floppy = Solver().route_one(
         s, _between(s, (0, 0, 1), (9, 9, 1), wire=_wire(min_bend_radius_mm=1.0)))
     stiff = Solver().route_one(
         s, _between(s, (0, 0, 1), (9, 9, 1), wire=_wire(min_bend_radius_mm=400.0)))
     assert floppy.status == stiff.status == "routed"
-    assert stiff.length_m >= floppy.length_m  # stiffness trades length for gentleness
+    assert stiff.length_m >= floppy.length_m
 
 
 def _turns(cells):
@@ -66,23 +66,22 @@ def _turns(cells):
 
 
 def test_bend_slider_straightens_route(empty_stack):
-    # an off-axis target forces a staircase of diagonal + straight steps. A strong bend
-    # weight must group the turns into a near-straight route; a relaxed one need not.
+    # An off-axis target forces a staircase of diagonal and straight steps. A strong bend
+    # weight has to group those turns; a relaxed one is free to scatter them.
     relaxed = Solver().route_one(
         empty_stack, _between(empty_stack, (0, 0, 1), (9, 3, 1), weights={"bend": 0.0}))
     strong = Solver().route_one(
         empty_stack, _between(empty_stack, (0, 0, 1), (9, 3, 1), weights={"bend": 10.0}))
     assert relaxed.status == strong.status == "routed"
-    # quadratic-amplified bend weight should drive the path to the minimum turns (<=2),
-    # and never more turns than the unconstrained route.
+    # two turns is the minimum for this endpoint pair
     assert _turns(strong.cells) <= 2
     assert _turns(strong.cells) <= _turns(relaxed.cells)
 
 
 def test_waypoint_join_is_not_a_sharp_turn(empty_stack):
-    # start east of a waypoint, then the route must head north-east to the end. With
-    # heading continuity across legs, the path leaves the waypoint along its arrival
-    # heading and bends gradually - no free sharp turn at the join.
+    # The two legs meet at the waypoint at an angle. Heading continuity across legs means
+    # the path leaves along its arrival heading and bends gradually, so the join is not a
+    # free sharp corner.
     s = empty_stack
     wp = (5, 0, 1)
     res = Solver().route_one(
@@ -103,7 +102,7 @@ def test_waypoint_join_is_not_a_sharp_turn(empty_stack):
 
 def test_hot_region_avoided_when_weighted(empty_stack):
     s = empty_stack
-    s.thermal[:, 5, :] = 90.0  # warm band (below the 200C rating, so soft only)
+    s.thermal[:, 5, :] = 90.0  # warm band, below the 200C rating, so it is a soft cost only
     start, end = (0, 5, 1), (9, 5, 1)
     avoid = Solver().route_one(
         s, _between(s, start, end, wire=_wire(max_temp_c=200.0),
@@ -134,5 +133,5 @@ def test_em_region_avoided_scaled_by_sensitivity(empty_stack):
 
 
 def test_waypoint_hit_and_melt_cutoff_removed():
-    # exercised in test_solver.py; this file is the behavior gate summary.
+    # Placeholder: waypoints and the melt cutoff are covered in test_solver.py.
     assert True

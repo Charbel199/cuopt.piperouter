@@ -35,9 +35,12 @@ def _unit(v):
 
 
 def _densify(G, max_seg):
-    """Resample so each segment <= max_seg. Returns (points (M,3), idx_map) where
-    idx_map[i] is the output index of original point G[i] (kept exactly), so callers
-    can re-locate hard-fixed points (endpoints, waypoints) after densification."""
+    """Resample so each segment is <= max_seg.
+
+    Returns (points (M,3), idx_map), where idx_map[i] is the output index of original
+    point G[i], which is kept exactly, so callers can re-locate hard-fixed points
+    (endpoints, waypoints) after densification.
+    """
     G = np.asarray(G, dtype=np.float64)
     out = [G[0]]
     idx_map = [0]
@@ -63,14 +66,14 @@ def _in_blocked(P, frame, blocked):
 
 def _solve_normal(A, B):
     """Least-squares solve of A x = B (B has 3 columns) via the normal equations.
-    Returns (N,3) ndarray.
 
-    CPU (scipy) by default - and on purpose. The smoothing system is tiny (a few hundred
-    points), so scipy solves it in microseconds. The GPU (cupy / cuSOLVER) path is OFF by
-    default because running cupy in the SAME long-lived server process as cuGraph
-    intermittently crashed the worker (a CUDA-context / RMM-allocator interaction), with
-    no real speedup at this size. Set PIPEROUTER_GPU_SMOOTH=1 to opt back into the GPU
-    solve (the cuGraph routing always stays on the GPU regardless)."""
+    Returns an (N,3) ndarray. Runs on the CPU (scipy) by default and deliberately so: the
+    smoothing system is tiny, a few hundred points, and running cupy in the same
+    long-lived process as cuGraph intermittently crashes the worker through a CUDA-context
+    / RMM-allocator interaction, for no real speedup at this size. Set
+    PIPEROUTER_GPU_SMOOTH=1 to opt into the GPU solve; cuGraph routing stays on the GPU
+    either way.
+    """
     if os.environ.get("PIPEROUTER_GPU_SMOOTH") == "1":
         try:
             import cupy as cp
@@ -101,9 +104,10 @@ def _solve_normal(A, B):
 def _build_ls(anchors, pin_mask, fixed, w_curv, h0, hN, d):
     """Assemble sparse A (R,N) and dense B (R,3) for the per-axis LS problem.
 
-    `fixed` = indices pinned hard IN PLACE (endpoints + waypoints): the curve must pass
-    exactly through them, but their tangent is free, so curvature minimisation makes the
-    pass-through smooth (continuous tangent)."""
+    `fixed` holds indices pinned in place (endpoints and waypoints): the curve must pass
+    exactly through them, but their tangent is free, so curvature minimisation keeps the
+    pass-through smooth.
+    """
     from scipy.sparse import csr_matrix
 
     N = len(anchors)
@@ -148,9 +152,9 @@ def smooth_path(G, frame, blocked, wire, start_heading, end_heading, strength,
 
     G: grid polyline (world points). strength: >0 smoothing weight (0 = off).
     blocked: bool occupancy (mesh+radius+clearance+melt) the curve must avoid.
-    fixed_idx: indices in G the curve must pass through EXACTLY (waypoints). The two
-    endpoints (0 and len(G)-1) are always fixed. Fixed points keep a free tangent, so
-    the curve sweeps smoothly THROUGH them rather than kinking.
+    fixed_idx: indices in G the curve must pass exactly through (waypoints). The two
+    endpoints (0 and len(G)-1) are always fixed. Fixed points keep a free tangent, so the
+    curve sweeps through them rather than kinking.
     """
     G = np.asarray(G, dtype=np.float64)
     strength = float(strength)

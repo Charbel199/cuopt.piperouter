@@ -1,11 +1,11 @@
-"""Pluggable LOCAL optimizers - turn a coarse, collision-free polyline into a smooth final
-cable shape. Swappable for evaluation; the default 'fibre' is the proven fibre-neutre
-least-squares smoother. All optimizers keep the fixed points (endpoints + waypoints)
-pinned and are COLLISION-SAFE: they never move a point into a blocked cell.
+"""Pluggable local optimizers: turn a coarse, collision-free polyline into a smooth final
+cable shape. They are swappable for evaluation; the default is 'fibre', the fibre-neutre
+least-squares smoother. All of them keep the fixed points (endpoints and waypoints) pinned
+and never move a point into a blocked cell.
 
 Signature: optimize(polyline, frame, blocked, wire, start_heading, end_heading,
                     strength, fixed_idx) -> list[np.ndarray]
-  polyline      list of (3,) world points (METERS)
+  polyline      list of (3,) world points, in metres
   blocked       bool grid (wire-radius-dilated occupancy | melt | prior routes)
   strength      0 = pass through unchanged; higher = more iterations / smoother
 """
@@ -29,7 +29,7 @@ def _is_free(frame, blocked, p):
 
 
 class NoOpLocal:
-    """No smoothing - the raw grid path. Baseline for comparison."""
+    """No smoothing: the raw grid path, as a baseline for comparison."""
     name = "none"
 
     def optimize(self, polyline, frame, blocked, wire, start_heading, end_heading,
@@ -38,8 +38,8 @@ class NoOpLocal:
 
 
 class FibreLocal:
-    """Fibre-neutre least-squares smoothing (production default). Identical to the
-    pre-refactor behaviour: strength<=0 or <3 points -> raw path."""
+    """Fibre-neutre least-squares smoothing, the default. A strength of 0 or fewer than
+    three points returns the raw path."""
     name = "fibre"
 
     def optimize(self, polyline, frame, blocked, wire, start_heading, end_heading,
@@ -53,12 +53,15 @@ class FibreLocal:
 
 
 class TrajOptLocal:
-    """Trajectory optimization (CHOMP-style) against a signed clearance field. Each
-    interior point follows two gradients: a SMOOTHNESS term (toward the neighbour midpoint,
-    curvature down) and an OBSTACLE term that climbs the distance-to-obstacle field's
-    gradient whenever the point is closer than a safety margin. The clearance field is the
-    Euclidean distance transform of the (wire-dilated + prior-route) blocked grid, so it's
-    a true SDF - and every move is collision-projected so it can never enter a blocked cell."""
+    """Trajectory optimization (CHOMP-style) against a signed clearance field.
+
+    Each interior point follows two gradients: a smoothness term pulling toward the
+    neighbour midpoint (curvature down), and an obstacle term climbing the
+    distance-to-obstacle gradient whenever the point is closer than a safety margin. The
+    clearance field is the Euclidean distance transform of the (wire-dilated plus
+    prior-route) blocked grid, so it is a true SDF. Every move is collision-projected, so
+    a point can never enter a blocked cell.
+    """
     name = "trajopt"
 
     def optimize(self, polyline, frame, blocked, wire, start_heading, end_heading,
@@ -70,7 +73,7 @@ class TrajOptLocal:
         from scipy import ndimage
         cell = float(frame.cell_size)
         nx, ny, nz = blocked.shape
-        # SDF: metres to the nearest blocked cell, and its gradient (world axes == grid axes)
+        # SDF: metres to the nearest blocked cell, plus its gradient (world axes == grid axes)
         dist = ndimage.distance_transform_edt(~blocked).astype(np.float64) * cell
         g0, g1, g2 = np.gradient(dist)
         margin = wire.radius_m + 0.5 * cell
@@ -102,11 +105,13 @@ class TrajOptLocal:
 
 
 class ElasticRodLocal:
-    """Discrete elastic-rod relaxation (bending + stretch; no twist). Springs hold each
-    segment near its ORIGINAL length (slack preserved), and a bending force minimizes
-    curvature with a stiffness derived from the cable's min-bend radius - so a stiff pipe
-    (large min bend) straightens far more than a floppy wire, like a real rod. Every move
-    is collision-projected against the blocked grid."""
+    """Discrete elastic-rod relaxation: bending and stretch, no twist.
+
+    Springs hold each segment near its original length, preserving slack, and a bending
+    force minimizes curvature with a stiffness derived from the cable's min-bend radius,
+    so a stiff pipe straightens far more than a floppy wire. Every move is
+    collision-projected against the blocked grid.
+    """
     name = "elastic_rod"
 
     def optimize(self, polyline, frame, blocked, wire, start_heading, end_heading,

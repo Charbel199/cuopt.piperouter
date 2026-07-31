@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections import deque
 
 import numpy as np
-from scipy import ndimage
 
 from . import optimizers, planners
 from .lattice import ExpandedLatticeBuilder, LatticeBuilder, diagnose_no_path
@@ -13,13 +12,11 @@ from .models import RouteRequest, RouteResult, SolveReport
 # 6-neighbour steps for the nearest-free BFS used to rescue a buried endpoint.
 _BFS_STEPS = ((1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1))
 
-# Heading stub: a pinned start/end heading forces a STRAIGHT run of cells along the
-# heading before the route may bend (a connector's straight exit), sized from the
-# cable's min bend radius and clamped to this range. Shortened when geometry blocks it.
+# Heading stub: a pinned start/end heading forces a straight run of cells along the
+# heading before the route may bend (a connector's straight exit), sized from the cable's
+# min bend radius and clamped to this range. Shortened where geometry blocks it.
 _STUB_MIN_CELLS = 2
 _STUB_MAX_CELLS = 6
-# 6-connected structuring element for radius dilations of routed-wire masks.
-_ST6 = ndimage.generate_binary_structure(3, 1)
 
 
 def _in_bounds(blocked, c):
@@ -28,10 +25,12 @@ def _in_bounds(blocked, c):
 
 
 def _nearest_free_cell(blocked, cell):
-    """Nearest free cell to `cell` by breadth-first (6-connected) expansion through the
-    blocked grid - used to relocate a START/END that's buried inside an obstacle to the
-    closest open space. Returns the cell (the input cell if already free) or None if the
-    whole grid is blocked. Clamps an out-of-bounds input into the grid first."""
+    """Return the nearest free cell to `cell` by 6-connected breadth-first expansion.
+
+    Used to relocate a start or end buried inside an obstacle to the closest open space.
+    An out-of-bounds input is clamped into the grid first. Returns the input cell if it is
+    already free, or None if the whole grid is blocked.
+    """
     nx, ny, nz = blocked.shape
     start = (min(max(int(cell[0]), 0), nx - 1),
              min(max(int(cell[1]), 0), ny - 1),
@@ -69,30 +68,29 @@ class Solver:
         waypts = [req.start, *req.waypoints, req.end]
         cell_seq = [frame.world_to_grid(p) for p in waypts]
 
-        # Safety clearance, split into HARD vs a relaxable SHELL:
-        #   hard  = mesh dilated by the wire radius - the tube physically can't intersect
-        #           it. This is the ONLY thing that buries an endpoint (triggers relocation)
-        #           and the only thing the route can never enter.
-        #   shell = the extra safety-clearance band (radius .. radius+clearance). The route's
-        #           interior keeps this clear, but it's WAIVED in a ball around each endpoint,
-        #           so a connector sitting in the clearance band is still reachable and the
-        #           tube can pass through those near-surface voxels to reach the terminal.
-        # So clearance never pushes an endpoint off a surface; only a real mesh does.
+        # Safety clearance splits into a hard part and a relaxable shell:
+        #   hard  = mesh dilated by the wire radius. The tube cannot intersect it, so it is
+        #           the only thing that buries an endpoint (triggering relocation) and the
+        #           only thing the route may never enter.
+        #   shell = the extra clearance band (radius .. radius+clearance). The route's
+        #           interior keeps it clear, but it is waived in a ball around each
+        #           endpoint, so a connector sitting in the band is still reachable.
+        # Clearance therefore never pushes an endpoint off a surface; only real mesh does.
         radius = req.wire.radius_m
         clr = float(req.clearance_m)
         cell = float(frame.cell_size)
         rad_cells = int(radius / cell + 0.5 + 1e-9) if cell > 0 else 0
         hard = stack.dilate_occupancy(radius).astype(bool)
-        # Prior routed wires (route_all marks them dilated by THEIR radius; refine
-        # rasterizes locked tubes likewise), grown here by THIS wire's radius too, so the
-        # two tube BODIES stay r_prior + r_this apart - not just their centerlines.
+        # Prior routed wires arrive already dilated by their own radius; grow them by this
+        # wire's radius too, so the two tube bodies stay r_prior + r_this apart rather than
+        # only their centerlines.
         prior = None
         if extra_obstacles is not None:
             prior = np.asarray(extra_obstacles, dtype=bool)
             if rad_cells > 0 and prior.any():
                 prior = dilate6(prior, rad_cells)
-        # relocation target avoids mesh+radius, melt and prior tubes - but NOT the clearance
-        # band (an endpoint is allowed to sit within clearance of a surface).
+        # Relocation avoids mesh+radius, melt and prior tubes, but not the clearance band:
+        # an endpoint is allowed to sit within clearance of a surface.
         reloc_blocked = planners.blocked_mask(stack, req.wire, 0.0, prior)
         notes: list[str] = []
         start_world = np.asarray(req.start, dtype=np.float64)
@@ -100,7 +98,7 @@ class Solver:
 
         def _rescue(cell_ijk, marker_world, label):
             c = tuple(int(v) for v in cell_ijk)
-            if not (_in_bounds(hard, c) and hard[c]):    # buried in MESH+radius only
+            if not (_in_bounds(hard, c) and hard[c]):    # buried in mesh+radius only
                 return cell_ijk, marker_world, None
             free = _nearest_free_cell(reloc_blocked, cell_ijk)
             if free is None:
@@ -117,12 +115,11 @@ class Solver:
             if n:
                 notes.append(n)
 
-        # clearance shell, PER OBJECT: geometry with a clearance tag keeps ITS distance
+        # Clearance shell, per object: tagged geometry keeps its own distance
         # (clearance_values by class), untagged geometry keeps the request default. The
-        # shell is WAIVED in a ball around every terminal the route must touch: start,
-        # END, and each WAYPOINT (a user-pinned point near a surface is just as
-        # legitimate a terminal as a connector - without this, a point inside the
-        # clearance band made the whole wire no_path).
+        # shell is waived in a ball around every terminal the route must touch (start,
+        # waypoints, end); a user-pinned point near a surface is as legitimate a terminal
+        # as a connector, and without the waiver it turns the whole wire into no_path.
         cvals = list(getattr(stack, "clearance_values", ()) or ())
         has_cls = getattr(stack, "clearance_class", None) is not None and cvals
         max_clr = max([clr] + cvals) if (clr > 0.0 or cvals) else 0.0
@@ -136,12 +133,10 @@ class Solver:
             else:
                 shell = stack.dilate_occupancy(radius + clr).astype(bool).copy()
             shell &= ~hard
-            # Waive the shell around each terminal by the MINIMUM needed for
-            # reachability: the BFS distance from the terminal to the nearest cell
-            # OUTSIDE the band (+1). A terminal outside every band gets NO waiver.
-            # The old fixed max-clearance box exempted a large region around every
-            # terminal, which made wires connected to (or ending near) a tagged
-            # component look like they ignored its clearance entirely.
+            # Waive the shell around each terminal by the minimum needed for reachability:
+            # the BFS distance from the terminal to the nearest cell outside the band, +1.
+            # A terminal outside every band gets no waiver, so a wire ending near a tagged
+            # component still respects that component's clearance everywhere else.
             nx, ny, nz = hard.shape
             esc = shell | hard
             for c in cell_seq:                     # start, waypoints..., end (post-rescue)
@@ -158,10 +153,10 @@ class Solver:
                       max(0, ck - er):min(nz, ck + er + 1)] = False
         else:
             shell = None
-        # The planner only adds mesh+radius+melt itself, so the shell + prior tubes are
-        # folded into its extra-obstacles and it runs with clearance_m=0. `blocked` (the
-        # same set) is what the smoother avoids. `prior` is kept SEPARATE from the shell
-        # so no_path diagnosis can tell "another wire" from "the clearance band".
+        # The planner adds mesh+radius+melt itself, so the shell and prior tubes go in as
+        # its extra obstacles and it runs with clearance_m=0. `blocked` is the same set,
+        # and is what the smoother avoids. `prior` stays separate from the shell so no_path
+        # diagnosis can tell "another wire" from "the clearance band".
         if shell is not None:
             planner_extra = shell if prior is None else (shell | prior)
             blocked = reloc_blocked | shell
@@ -169,13 +164,12 @@ class Solver:
             planner_extra = prior
             blocked = reloc_blocked
 
-        # HEADING STUB: a pinned heading means the cable must LEAVE/ARRIVE along that
-        # direction for a real distance, not one voxel - otherwise a cheap 90-degree turn
-        # right after the first cell defeats the point of the arrow. March up to a
-        # min-bend-radius worth of FREE cells along the heading, force them as the path's
-        # straight prefix (start) / suffix (end), and route from the stub's far end (still
-        # heading-pinned there, so the hand-off into free routing stays gentle). The stub
-        # shortens gracefully wherever geometry/clearance blocks the runway.
+        # A pinned heading has to hold for a real distance, not one voxel, or a 90-degree
+        # turn right after the first cell defeats it. March up to a min-bend-radius worth
+        # of free cells along the heading, force them as the path's straight prefix (start)
+        # or suffix (end), and route from the stub's far end, still heading-pinned there so
+        # the hand-off into free routing stays gentle. The stub shortens wherever geometry
+        # or clearance blocks the runway.
         def _stub_cells(anchor, heading, sign):
             if heading is None or cell <= 0:
                 return []
@@ -199,21 +193,21 @@ class Solver:
             return out
 
         start_stub = _stub_cells(cell_seq[0], req.start_heading, +1)
-        # arrival stub is marched BACKWARD from the goal against the travel direction
+        # The arrival stub marches backward from the goal, against the travel direction.
         end_stub = _stub_cells(cell_seq[-1], req.end_heading, -1)
         orig_start = tuple(int(v) for v in cell_seq[0])
         orig_goal = tuple(int(v) for v in cell_seq[-1])
         if start_stub:
-            cell_seq[0] = start_stub[-1]      # route FROM the stub's far end
+            cell_seq[0] = start_stub[-1]      # route from the stub's far end
         if end_stub:
-            cell_seq[-1] = end_stub[-1]       # route TO the arrival stub's far end
+            cell_seq[-1] = end_stub[-1]       # route to the arrival stub's far end
 
         all_cells: list[tuple[int, int, int]] = list(start_stub)
         wp_cell_idx: list[int] = []   # index in all_cells of each waypoint's cell
         n_legs = len(cell_seq) - 1
         # Heading continuity across legs: each leg leaves a waypoint along the heading it
-        # arrived with, so the bend penalty applies THROUGH the waypoint instead of a free
-        # sharp turn there (legs are solved independently, so without this the join kinks).
+        # arrived with, so the bend penalty applies through the waypoint instead of a free
+        # sharp turn. Legs are solved independently, so without this the join kinks.
         prev_arrival = None
         for li, (a, b) in enumerate(zip(cell_seq[:-1], cell_seq[1:])):
             sh = req.start_heading if li == 0 else prev_arrival
@@ -224,17 +218,17 @@ class Solver:
                 goal_heading=gh,
             )
             if leg is None and li > 0 and sh is not None:
-                # the continuity heading over-constrained this leg (e.g. a hairpin
-                # waypoint that demands a >45 turn) - retry without it rather than fail.
+                # The continuity heading over-constrained this leg (e.g. a hairpin waypoint
+                # demanding a >45 degree turn); retry without it rather than fail.
                 leg = self._solve_leg(
                     planner, stack, req.wire, req.weights, req.connectivity, a, b,
                     planner_extra, clearance_m=0.0, start_heading=None,
                     goal_heading=gh,
                 )
             if leg is None and li == 0 and start_stub:
-                # the departure runway dead-ends (stub far end boxed in) - drop the
-                # stub and route from the original start; the heading still gates the
-                # first step, so this degrades to the pre-stub behaviour, not a failure.
+                # The departure runway dead-ends (stub far end boxed in). Drop the stub and
+                # route from the original start; the heading still gates the first step, so
+                # this degrades rather than failing.
                 start_stub = []
                 cell_seq[0] = orig_start
                 a = orig_start
@@ -253,9 +247,9 @@ class Solver:
                     planner_extra, clearance_m=0.0, start_heading=sh, goal_heading=gh,
                 )
             if leg is None:
-                # diagnose against PRIOR WIRES + the real clearance (not the shell folded
-                # into extra), so "overlaps another already-routed wire" is only said when
-                # a wire is actually there, and clearance-sealed cases name the clearance.
+                # Diagnose against prior wires and the real clearance, not the shell folded
+                # into extra, so "overlaps another already-routed wire" is only said when a
+                # wire is actually there and clearance-sealed cases name the clearance.
                 reason = diagnose_no_path(
                     stack, req.wire, req.connectivity, a, b, prior,
                     clearance_m=clr,
@@ -272,27 +266,26 @@ class Solver:
             if li < n_legs - 1 and all_cells:
                 wp_cell_idx.append(len(all_cells) - 1)   # this leg ended at a waypoint
 
-        # append the forced arrival run: effective goal -> ... -> the original goal cell
+        # Append the forced arrival run: effective goal -> ... -> the original goal cell.
         suffix_begin = None
         if end_stub:
             suffix_begin = len(all_cells)
             all_cells.extend(list(reversed(end_stub[:-1])) + [orig_goal])
 
-        # Build the world polyline. Anchor it to the ACTUAL endpoint markers (the start
-        # cell isn't in all_cells - the source links to a NEIGHBOUR of it - and markers
-        # sit at sub-cell positions, so otherwise the tube looks detached). Replace each
-        # waypoint's cell centre with the EXACT waypoint marker, and mark start /
-        # waypoints / end as hard points the smoother must pass through (waypoints are a
-        # hard requirement; a free tangent there keeps the pass-through smooth).
+        # Build the world polyline, anchored to the endpoint markers themselves: the start
+        # cell isn't in all_cells (the source links to a neighbour of it) and markers sit
+        # at sub-cell positions, so otherwise the tube looks detached. Each waypoint's cell
+        # centre is replaced by the waypoint marker, and start/waypoints/end are marked as
+        # hard points the smoother must pass through.
         cell_world = [np.asarray(frame.grid_to_world(c), dtype=np.float64) for c in all_cells]
         wpset = set(wp_cell_idx)
         for k, ci in enumerate(wp_cell_idx):
             if k < len(req.waypoints):
                 cell_world[ci] = np.asarray(req.waypoints[k], dtype=np.float64)
 
-        # Stub cells snap onto the EXACT heading ray from the marker (voxel centres can
-        # sit up to half a cell off the arrow line), and the stubs' far ends become
-        # pass-through-fixed points so smoothing keeps the straight run straight.
+        # Stub cells snap onto the heading ray from the marker (voxel centres can sit up to
+        # half a cell off the arrow line). The stubs' far ends become pass-through-fixed
+        # points so smoothing keeps the straight run straight.
         stub_fixed: set[int] = set()
         if start_stub:
             hs = np.asarray(req.start_heading, dtype=np.float64)
@@ -308,8 +301,8 @@ class Solver:
                 cell_world[idx] = end_world - he * cell * (last - idx)
             stub_fixed.add(suffix_begin - 1)   # the leg's final cell = the stub's far end
 
-        # Anchor to the markers - or, when an endpoint was buried, to the open point we
-        # relocated it to (start_world / end_world), so the tube ends in free space.
+        # Anchor to the markers, or, when an endpoint was buried, to the open point it was
+        # relocated to (start_world / end_world), so the tube ends in free space.
         pts = [start_world]
         flags = [True]
         for j, p in enumerate(cell_world):
@@ -330,12 +323,11 @@ class Solver:
         # Capture the pre-smoothing grid path (stair-stepped) for debug views.
         raw_polyline = [[float(x) for x in p] for p in polyline]
 
-        # Local optimizer (default: fibre-neutre least-squares smoothing). Collision-safe
-        # against the same prohibited voxels the planner avoided. weights["smoothing"]
-        # is the strength knob (0 -> pass-through raw path for the smoothing-based ones).
+        # Local optimizer (default: fibre-neutre least-squares smoothing), collision-safe
+        # against the same prohibited voxels the planner and relocation used.
+        # weights["smoothing"] is the strength knob; 0 passes the raw path through.
         strength = float(req.weights.get("smoothing", 1.0))
         if len(polyline) >= 3:
-            # same prohibited voxels the planner/relocation used
             polyline = optimizer.optimize(
                 polyline, frame, blocked, req.wire,
                 req.start_heading, req.end_heading, strength, fixed_idx)
@@ -350,11 +342,13 @@ class Solver:
         )
 
     def route_all(self, stack, requests: list[RouteRequest]) -> SolveReport:
-        """Priority-ordered greedy: earlier (lower-priority-number) routes become
-        obstacles for later ones (spec §5, Route-All). Each routed wire is marked
-        DILATED BY ITS RADIUS (its actual tube body, not just the 1-cell centerline);
-        route_one additionally grows prior obstacles by the next wire's radius, so two
-        tube bodies keep r_a + r_b apart instead of overlapping at fine resolutions."""
+        """Route greedily in priority order; earlier routes become obstacles for later ones.
+
+        Lower priority numbers route first. Each routed wire is marked dilated by its
+        radius, i.e. its actual tube body rather than a 1-cell centerline; route_one
+        additionally grows prior obstacles by the next wire's radius, so two tube bodies
+        keep r_a + r_b apart instead of overlapping at fine resolutions.
+        """
         ordered = sorted(requests, key=lambda r: r.priority)
         occupied = np.zeros(stack.frame.res_xyz, dtype=bool)
         cell = float(stack.frame.cell_size)

@@ -15,9 +15,11 @@ def _wire():
 
 
 def _max_turn(poly):
-    """Largest heading change at any single vertex (radians). Smoothing spreads a
-    sharp corner across many gentle vertices, so this drops even though the TOTAL
-    turning (endpoint-determined) stays ~constant."""
+    """Largest heading change at any single vertex, in radians.
+
+    Total turning is fixed by the endpoints, so it is this per-vertex maximum, not the
+    sum, that smoothing reduces as it spreads a corner over many gentle vertices.
+    """
     poly = np.asarray(poly, float)
     segs = np.diff(poly, axis=0)
     n = np.linalg.norm(segs, axis=1, keepdims=True)
@@ -64,7 +66,7 @@ def test_smoothed_curve_stays_out_of_blocked():
     G = ([f.grid_to_world((i, 5, 1)) for i in range(5)]
          + [f.grid_to_world((4, j, 1)) for j in range(6, 12)])
     out = np.asarray(smoothing.smooth_path(G, f, blocked, _wire(), None, None, 8.0))
-    # no INTERIOR point lands in a prohibited voxel (endpoints are terminals)
+    # no interior point lands in a blocked voxel; the endpoints are terminals
     for p in out[1:-1]:
         idx = f.world_to_grid(p)
         assert not blocked[idx]
@@ -86,7 +88,7 @@ def test_waypoint_is_passed_through_exactly():
 
 
 def test_waypoint_free_means_curve_may_miss_it():
-    # without pinning, strong smoothing cuts the corner (so pinning is what guarantees it)
+    # Strong smoothing cuts an unpinned corner, so fixed_idx is what makes a waypoint hard.
     f = _frame()
     blocked = np.zeros(f.res_xyz, dtype=bool)
     G = ([f.grid_to_world((i, 5, 1)) for i in range(6)]
