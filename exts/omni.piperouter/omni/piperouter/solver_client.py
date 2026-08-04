@@ -6,7 +6,10 @@ import urllib.request
 
 
 class SolverClient:
-    def __init__(self, base_url: str = "http://localhost:8000", timeout: float = 180.0):
+    def __init__(self, base_url: str = "http://localhost:8000", timeout: float = 900.0):
+        # Generous because the `dense` planner trades latency for route quality: a
+        # nine-wire scene takes minutes where the corridor planner takes seconds, and a
+        # socket timeout mid-solve looks like a hang rather than a slow answer.
         self.base = base_url.rstrip("/")
         self.timeout = timeout
 

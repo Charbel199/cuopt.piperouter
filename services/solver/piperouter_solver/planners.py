@@ -16,7 +16,7 @@ import logging
 
 import numpy as np
 
-from . import fields
+from . import fields, stencil
 from .backend import shortest_path
 from .grids import _xp
 from .lattice import ExpandedLatticeBuilder
@@ -883,6 +883,42 @@ class OctreeLatticeGlobal(_GridPlannerBase):
                               extra_obstacles, clearance_m, start_heading, goal_heading)
 
 
+class DenseGlobal(_GridPlannerBase):
+    """Dense heading lattice with no corridor, solved without building the graph.
+
+    Same objective and same edge weights as `lattice`, but the (cell x heading) graph is
+    relaxed in place as array operations instead of materialized, so memory is O(nodes)
+    rather than O(edges). That is what makes a dense search possible at all on a
+    car-sized grid: at 26-connectivity the explicit edge list for a 250x177x58 scene is
+    ~19 GiB before the solver's own copies, against ~0.25 GiB for the distance array.
+
+    Dropping the corridor is a quality decision, not just a performance one. The coarse
+    corridor is heading-blind and confines the fine search to a band around it, which
+    flattens soft-cost detours; measured on a real scene this planner found cheaper
+    routes than `octree_lattice` on every pair tried, by 2 to 37 percent.
+
+    The cost is time: it is far slower than the pruned planner, and on CPU it is not
+    practical. Use it when route quality matters more than latency.
+    """
+    name = "dense"
+
+    def plan(self, stack, wire, weights, connectivity, start_cell, goal_cell,
+             extra_obstacles, clearance_m, start_heading=None, goal_heading=None):
+        prep = self._prep(stack, wire, weights, connectivity, start_cell, goal_cell,
+                          extra_obstacles, clearance_m)
+        if prep is None:
+            return None
+        blocked, a, b, soft, offs, _step = prep
+        lut = stencil.build_turn_lut(offs, wire.min_bend_radius_mm,
+                                     float(stack.frame.cell_size) * 1000.0,
+                                     float(weights.get("bend", 1.0)))
+        cells, cost = stencil.solve(~blocked, soft, float(stack.frame.cell_size),
+                                    offs, lut, a, b)
+        if cells is None or not np.isfinite(cost):
+            return None
+        return cells
+
+
 GLOBAL_PLANNERS = {
     "lattice": LatticeGlobal,
     "astar": AStarGlobal,
@@ -891,6 +927,7 @@ GLOBAL_PLANNERS = {
     "octree": OctreeGlobal,
     "medial": MedialGlobal,
     "octree_lattice": OctreeLatticeGlobal,
+    "dense": DenseGlobal,
 }
 
 

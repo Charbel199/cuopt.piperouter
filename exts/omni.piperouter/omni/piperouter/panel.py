@@ -31,9 +31,11 @@ _WEIGHTS = ("surface", "bend", "thermal", "em", "smoothing")
 # octree_lattice is the default: the bend-aware lattice restricted to a corridor band,
 # falling back to the full lattice when the band is too tight. Plain lattice is the
 # exhaustive mode, for when soft costs must be followed exactly.
-_GLOBAL_ALGOS = ("octree_lattice", "lattice", "astar", "fmm", "rrt", "octree", "medial")
+_GLOBAL_ALGOS = ("octree_lattice", "dense", "lattice", "astar", "fmm", "rrt", "octree",
+                 "medial")
 _LOCAL_ALGOS = ("fibre", "none", "trajopt", "elastic_rod")
 _GLOBAL_SPECIAL = {"octree_lattice": "octree_lattice (fast - default)",
+                   "dense": "dense (best quality, needs GPU)",
                    "lattice": "lattice (exhaustive)"}
 _GLOBAL_LABELS = tuple(_GLOBAL_SPECIAL.get(n, f"{n} (experimental)") for n in _GLOBAL_ALGOS)
 _LOCAL_LABELS = tuple(n if n in ("fibre", "none") else f"{n} (experimental)" for n in _LOCAL_ALGOS)
