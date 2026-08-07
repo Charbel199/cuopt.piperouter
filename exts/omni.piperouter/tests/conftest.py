@@ -73,8 +73,7 @@ def solver_server(tmp_path):
 
     grid_dir = tmp_path / "grids"
     grid_dir.mkdir()
-    wt = REPO_ROOT / "services" / "solver" / "wire_types.json"
-    app = app_factory(FilesystemSessionStore(grid_dir), wt)
+    app = app_factory(FilesystemSessionStore(grid_dir))
     port = _free_port()
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port,
                                            log_level="warning"))

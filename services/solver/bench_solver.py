@@ -18,7 +18,7 @@ from piperouter_solver.grids import GridStack
 from piperouter_solver.models import RouteRequest, WireType
 from piperouter_solver.solver import Solver
 
-ALGOS = ("lattice", "octree_lattice", "astar", "fmm", "medial")
+ALGOS = ("lattice", "octree_lattice", "astar", "octree")
 
 
 def _backend():

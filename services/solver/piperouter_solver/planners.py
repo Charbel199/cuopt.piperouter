@@ -2,8 +2,8 @@
 goal cell.
 
 Planners are interchangeable so they can be compared against each other (bench_algos.py);
-'lattice' is the heading-aware default, the rest are other families (plain grid A*,
-Eikonal cost-to-go descent, sampling-based RRT-Connect).
+'octree_lattice' is the default, the rest are other families kept for comparison
+(plain grid A*, sampling-based RRT-Connect, coarse octree).
 
 Every planner returns a list of (i,j,k) cells from start to goal (no source/sink nodes)
 or None, and searches only cells that are free after dilating the occupancy by the wire
@@ -151,100 +151,6 @@ class AStarGlobal(_GridPlannerBase):
                     came[nb] = c
                     heapq.heappush(pq, (ng + h(nb), nb))
         return None
-
-
-class FMMGlobal(_GridPlannerBase):
-    """Eikonal fast marching.
-
-    Solves |∇T| = slowness for the arrival-time field T from the goal using the Godunov
-    upwind quadratic update, which is sub-cell accurate and has less grid bias than
-    graph-Dijkstra, then gradient-descends T from the start. slowness = 1 + soft, so the
-    front advances slower through costly cells and the descent skirts them."""
-    name = "fmm"
-
-    def plan(self, stack, wire, weights, connectivity, start_cell, goal_cell,
-             extra_obstacles, clearance_m, start_heading=None, goal_heading=None):
-        prep = self._prep(stack, wire, weights, connectivity, start_cell, goal_cell,
-                          extra_obstacles, clearance_m)
-        if prep is None:
-            return None
-        blocked, a, b, soft, offs, step = prep
-        nx, ny, nz = blocked.shape
-        cell = float(stack.frame.cell_size)
-        slow = (1.0 + soft).astype(np.float64)        # cost per metre
-        INF = 1e18
-        T = np.full(blocked.shape, INF)
-        frozen = np.zeros(blocked.shape, dtype=bool)
-        FACES = ((1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1))
-
-        def godunov(i, j, k):
-            f = slow[i, j, k] * cell                  # one-cell traversal cost
-            mins = []
-            for axis, (dp, dm) in enumerate(((1, -1),) * 3):
-                pa, pb = list((i, j, k)), list((i, j, k))
-                pa[axis] += 1
-                pb[axis] -= 1
-                m = INF
-                for (ii, jj, kk) in (pa, pb):
-                    if 0 <= ii < nx and 0 <= jj < ny and 0 <= kk < nz and frozen[ii, jj, kk]:
-                        m = min(m, T[ii, jj, kk])
-                if m < INF:
-                    mins.append(m)
-            mins.sort()
-            t = mins[0] + f                            # 1-axis solution
-            if len(mins) >= 2 and t > mins[1]:
-                a2, b2 = mins[0], mins[1]
-                s = a2 + b2
-                disc = s * s - 2.0 * (a2 * a2 + b2 * b2 - f * f)
-                if disc >= 0:
-                    t = 0.5 * (s + disc ** 0.5)
-                if len(mins) >= 3 and t > mins[2]:
-                    a3, b3, c3 = mins
-                    s = a3 + b3 + c3
-                    disc = s * s - 3.0 * (a3 * a3 + b3 * b3 + c3 * c3 - f * f)
-                    if disc >= 0:
-                        t = (s + disc ** 0.5) / 3.0
-            return t
-
-        T[b] = 0.0
-        heap = [(0.0, b)]
-        while heap:
-            tval, c = heapq.heappop(heap)
-            if frozen[c]:
-                continue
-            frozen[c] = True
-            ci, cj, ck = c
-            for dx, dy, dz in FACES:
-                nb = (ci + dx, cj + dy, ck + dz)
-                if not (0 <= nb[0] < nx and 0 <= nb[1] < ny and 0 <= nb[2] < nz):
-                    continue
-                if blocked[nb] or frozen[nb]:
-                    continue
-                nt = godunov(*nb)
-                if nt < T[nb]:
-                    T[nb] = nt
-                    heapq.heappush(heap, (nt, nb))
-                if a == nb and frozen[a]:
-                    pass
-            if frozen[a]:
-                break
-        if T[a] >= INF:
-            return None
-        # Descend T from start to goal, stepping over the full connectivity.
-        path = [a]
-        c = a
-        seen = {a}
-        while c != b and len(path) < blocked.size:
-            best, best_c = T[c], None
-            for _oi, nb in self._neighbors(c, offs, blocked):
-                if nb not in seen and T[nb] < best:
-                    best, best_c = T[nb], nb
-            if best_c is None:
-                return None
-            path.append(best_c)
-            seen.add(best_c)
-            c = best_c
-        return path
 
 
 class RRTGlobal(_GridPlannerBase):
@@ -726,53 +632,6 @@ class OctreeGlobal(_GridPlannerBase):
         return cells or None
 
 
-class MedialGlobal(_GridPlannerBase):
-    """Clearance-seeking planner, in the flavour of a medial axis.
-
-    Runs A* with an edge cost that penalizes cells with a small Euclidean distance to the
-    nearest obstacle, so the route is pulled onto the high-clearance spine of free
-    space."""
-    name = "medial"
-
-    def plan(self, stack, wire, weights, connectivity, start_cell, goal_cell,
-             extra_obstacles, clearance_m, start_heading=None, goal_heading=None):
-        prep = self._prep(stack, wire, weights, connectivity, start_cell, goal_cell,
-                          extra_obstacles, clearance_m)
-        if prep is None:
-            return None
-        from scipy import ndimage
-        blocked, a, b, soft, offs, step = prep
-        cell = float(stack.frame.cell_size)
-        dist = ndimage.distance_transform_edt(~blocked).astype(np.float64)   # cells to obstacle
-        dmax = float(dist.max()) or 1.0
-        bb = np.asarray(b, dtype=float)
-        w_clear = 4.0           # how hard to hug the clearance spine
-
-        def h(c):
-            return cell * float(np.linalg.norm(np.asarray(c, dtype=float) - bb))
-
-        g = {a: 0.0}
-        came = {}
-        pq = [(h(a), a)]
-        while pq:
-            _f, c = heapq.heappop(pq)
-            if c == b:
-                path = [c]
-                while c in came:
-                    c = came[c]
-                    path.append(c)
-                return path[::-1]
-            gc = g[c]
-            for oi, nb in self._neighbors(c, offs, blocked):
-                clear_pen = 1.0 + w_clear * (1.0 - dist[nb] / dmax)   # nearer obstacle, costlier
-                ng = gc + step[oi] * (1.0 + float(soft[nb])) * clear_pen
-                if ng < g.get(nb, 1e18):
-                    g[nb] = ng
-                    came[nb] = c
-                    heapq.heappush(pq, (ng + h(nb), nb))
-        return None
-
-
 # Edge budget for the full-lattice fallback. The exhaustive (cell x heading) graph has
 # roughly n_free * H^2 edges; past 1e9 the build stalls for minutes on CPU and runs a
 # 95 GB GPU out of memory under cuGraph. Above the budget the fallback is skipped and the
@@ -922,10 +781,8 @@ class DenseGlobal(_GridPlannerBase):
 GLOBAL_PLANNERS = {
     "lattice": LatticeGlobal,
     "astar": AStarGlobal,
-    "fmm": FMMGlobal,
     "rrt": RRTGlobal,
     "octree": OctreeGlobal,
-    "medial": MedialGlobal,
     "octree_lattice": OctreeLatticeGlobal,
     "dense": DenseGlobal,
 }

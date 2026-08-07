@@ -7,8 +7,7 @@ FROM nvidia/cuda:12.8.1-runtime-ubuntu24.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PIP_BREAK_SYSTEM_PACKAGES=1 \
-    PIPEROUTER_GRID_DIR=/dev/shm/piperouter \
-    WIRE_TYPES_PATH=/app/wire_types.json
+    PIPEROUTER_GRID_DIR=/dev/shm/piperouter
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends python3 python3-pip \
@@ -25,7 +24,7 @@ RUN pip install --no-cache-dir --extra-index-url https://pypi.nvidia.com \
         cugraph-cu12 cudf-cu12 cupy-cuda12x \
     || echo "WARN: GPU wheels unavailable; service will use the scipy/numpy fallback"
 
-COPY pyproject.toml wire_types.json ./
+COPY pyproject.toml ./
 COPY piperouter_solver ./piperouter_solver
 COPY piperouter_service ./piperouter_service
 RUN pip install --no-cache-dir .

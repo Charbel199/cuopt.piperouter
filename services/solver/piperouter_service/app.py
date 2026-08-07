@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import logging
 import os
 import sys
@@ -13,8 +12,6 @@ from piperouter_solver.solver import Solver
 
 from .schemas import RouteOut, SolveAllBody, SolveAllOut, SolveBody
 from .session_store import FilesystemSessionStore
-
-_DEFAULT_WIRE_TYPES = Path(__file__).resolve().parents[1] / "wire_types.json"
 
 
 def _setup_logging() -> None:
@@ -60,17 +57,13 @@ def _route_out(res: RouteResult) -> RouteOut:
     )
 
 
-def app_factory(store: FilesystemSessionStore, wire_types_path: Path) -> FastAPI:
+def app_factory(store: FilesystemSessionStore) -> FastAPI:
     app = FastAPI(title="PipeRouter Solver", version="0.1.0")
     solver = Solver()
 
     @app.get("/health")
     def health():
         return {"status": "ok", "backend": _backend_name()}
-
-    @app.get("/wire_types")
-    def wire_types():
-        return json.loads(Path(wire_types_path).read_text())
 
     @app.post("/solve", response_model=RouteOut)
     def solve(body: SolveBody):
@@ -106,6 +99,5 @@ def app_factory(store: FilesystemSessionStore, wire_types_path: Path) -> FastAPI
 
 _setup_logging()
 app = app_factory(
-    FilesystemSessionStore(),
-    Path(os.environ.get("WIRE_TYPES_PATH", _DEFAULT_WIRE_TYPES)),
+    FilesystemSessionStore(Path(os.environ.get("GRID_DIR", "/dev/shm/piperouter"))),
 )

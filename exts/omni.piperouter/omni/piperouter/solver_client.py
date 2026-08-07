@@ -29,8 +29,6 @@ class SolverClient:
     def health(self):
         return self._get("/health")
 
-    def wire_types(self):
-        return self._get("/wire_types")
 
     def solve(self, session_id: str, route: dict, locked_routes=None):
         body = {"session_id": session_id, "route": route}

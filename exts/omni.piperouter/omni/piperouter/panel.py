@@ -21,7 +21,6 @@ import omni.usd
 from pxr import Tf, Usd
 
 from . import bom as bom_lib
-from . import bundles as bundle_lib
 from . import headings, help_window, hud as hud_mod, scene_ops, session_io, viewport_labels, viewport_pick, waypoints, wire_library
 
 _WEIGHTS = ("surface", "bend", "thermal", "em", "smoothing")
@@ -31,8 +30,7 @@ _WEIGHTS = ("surface", "bend", "thermal", "em", "smoothing")
 # octree_lattice is the default: the bend-aware lattice restricted to a corridor band,
 # falling back to the full lattice when the band is too tight. Plain lattice is the
 # exhaustive mode, for when soft costs must be followed exactly.
-_GLOBAL_ALGOS = ("octree_lattice", "dense", "lattice", "astar", "fmm", "rrt", "octree",
-                 "medial")
+_GLOBAL_ALGOS = ("octree_lattice", "dense", "lattice", "astar", "rrt", "octree")
 _LOCAL_ALGOS = ("fibre", "none", "trajopt", "elastic_rod")
 _GLOBAL_SPECIAL = {"octree_lattice": "octree_lattice (fast - default)",
                    "dense": "dense (best quality, needs GPU)",
@@ -321,8 +319,7 @@ class PipeRouterPanel:
                                              "corridor, ~10x faster at high res, falls back "
                                              "to the full lattice when needed); lattice = "
                                              "exhaustive full-grid search; others for "
-                                             "comparison: astar, fmm (Eikonal), rrt, octree, "
-                                             "medial.")
+                                             "comparison: astar, rrt, octree.")
                             self._global_combo = ui.ComboBox(0, *_GLOBAL_LABELS)
                         with ui.HStack(height=0):
                             ui.Label("Local optimizer", width=self._LBL,

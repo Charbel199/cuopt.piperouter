@@ -30,10 +30,8 @@ def _stack(blocked_wall=False):
 
 @pytest.fixture
 def client(tmp_path):
-    from pathlib import Path
     store = FilesystemSessionStore(tmp_path)
-    wt = Path(__file__).resolve().parents[1] / "wire_types.json"
-    return TestClient(app_factory(store, wt)), store
+    return TestClient(app_factory(store)), store
 
 
 def _world(frame, ijk):
@@ -47,11 +45,6 @@ def test_health_ok(client):
     assert r.json()["status"] == "ok"
     assert r.json()["backend"] in ("scipy", "gpu")
 
-
-def test_wire_types_lists_defaults(client):
-    c, _ = client
-    ids = [t["id"] for t in c.get("/wire_types").json()["types"]]
-    assert "pwr_4awg" in ids and "ac_pipe_12" in ids
 
 
 def test_solve_open_grid_routes(client):
